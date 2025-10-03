@@ -1,8 +1,4 @@
-use axum::{
-    extract::{Json, State},
-    routing::{get, post},
-    Router,
-};
+#[cfg(feature = "rest-api")] use axum::{extract::{Json, State}, routing::{get, post}, Router};
 use clap::Parser;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -11,7 +7,8 @@ use tokio::signal;
 
 // Declare modules for better code organization
 mod error;
-mod mcp;
+mod mcp; // new MCP sdk implementation
+#[cfg(feature = "rest-api")] mod legacy_rest; // (to be added / moved if needed)
 mod state;
 mod stdio;
 
@@ -43,7 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the shared application state
     let app_state: AppState = Arc::new(Mutex::new(PortState::default()));
 
-    if args.server {
+    if args.server && cfg!(feature = "rest-api") {
         // --- HTTP Server Mode ---
         let app = Router::new()
             .route("/ports/list", get(http_list_ports))
@@ -66,9 +63,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_graceful_shutdown(shutdown_signal())
             .await?;
     } else {
-        // --- Stdio Mode ---
-        println!("Robust Serial MCP Server v3.0");
-        stdio::run_stdio_interface(app_state).await;
+        // Prefer MCP stdio when mcp feature enabled
+        #[cfg(feature = "mcp")] {
+            println!("Serial MCP Server (official SDK) starting in stdio MCP mode");
+            if let Err(e) = mcp::start_mcp_server_stdio(app_state.clone()).await {
+                eprintln!("MCP server exited with error: {e}");
+            }
+        }
+        #[cfg(not(feature = "mcp"))] {
+            println!("MCP feature disabled, falling back to legacy stdio JSON mode");
+            stdio::run_stdio_interface(app_state).await;
+        }
     }
 
     Ok(())
