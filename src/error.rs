@@ -1,3 +1,4 @@
+#[cfg(feature = "rest-api")]
 use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
@@ -39,9 +40,11 @@ impl fmt::Display for AppError {
     }
 }
 
-/// Allows Axum to convert `AppError` into an HTTP response.
+/// Allows Axum to convert `AppError` into an HTTP response (only when rest-api feature enabled).
+#[cfg(feature = "rest-api")]
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
+        use axum::http::StatusCode;
         let (status, error_type, error_message) = match self {
             AppError::PortNotOpen => (StatusCode::CONFLICT, "PortNotOpen", self.to_string()),
             AppError::PortAlreadyOpen => (StatusCode::CONFLICT, "PortAlreadyOpen", self.to_string()),
@@ -51,7 +54,7 @@ impl IntoResponse for AppError {
             AppError::SerdeError(_) => (StatusCode::BAD_REQUEST, "DeserializationError", self.to_string()),
         };
 
-        let body = Json(json!({
+        let body = axum::Json(json!({
             "status": "error",
             "error": {
                 "type": error_type,

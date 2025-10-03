@@ -16,8 +16,9 @@ clap = { version = "4.5.4", features = ["derive"] }
 serde = { version = "1.0.197", features = ["derive"] }
 serde_json = "1.0.115"
 serialport = "4.3.0"
-tokio = { version = "1.37.0", features = ["full"] }
+tokio = { version = "1.47.1", features = ["full"] }
 rust-mcp-sdk = { version = "0.7.0", default-features = false, optional = true, features = ["server","macros","stdio","streamable-http","hyper-server","2025_06_18"] }
+async-trait = { version = "0.1.83", optional = false }
 
 [features]
 default = ["mcp","rest-api"]
@@ -30,7 +31,6 @@ rest-api = ["axum"]
 stdio-only = []
 
 [dev-dependencies]
-tokio = { version = "1.47.1", features = ["full"], default-features = false }
 serde_json = "1.0"
 criterion = { version = "0.7.0", features = ["async_tokio"] }
 assert-json-diff = "2.0"

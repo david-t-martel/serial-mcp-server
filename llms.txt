@@ -1,0 +1,81 @@
+LLM / Agent Integration Cheat Sheet
+===================================
+
+Purpose: Operate a single serial port via MCP tools exposed by this process.
+
+TOOLS
+------
+list_ports  -> Enumerate available system serial ports.
+open_port   -> Open with configuration.
+write       -> Write UTF-8 data (string) to the open port.
+read        -> Read up to 1024 bytes (0 bytes on timeout, not an error).
+close       -> Close the port (idempotent).
+status      -> Return current state + configuration if open.
+
+OPEN_PORT ARGUMENTS
+-------------------
+port_name   (string, required)
+baud_rate   (u32, required)
+timeout_ms  (u64, default 1000)
+data_bits   (five|six|seven|eight, default eight; accepts 5..8 numerically)
+parity      (none|odd|even, default none)
+stop_bits   (one|two, default one)
+flow_control (none|hardware|software, default none)
+
+SAMPLE CALL (pseudo JSON-RPC tools/call)
+---------------------------------------
+{
+  "method": "tools/call",
+  "params": {
+    "name": "open_port",
+    "arguments": {
+      "port_name": "COM3",
+      "baud_rate": 115200,
+      "timeout_ms": 500,
+      "data_bits": "eight",
+      "parity": "none",
+      "stop_bits": "one",
+      "flow_control": "none"
+    }
+  }
+}
+
+COMMON FLOWS
+------------
+1. Initialize -> list_ports -> choose port -> open_port -> write/read loop -> close.
+2. If open_port fails with "Port already open": either proceed with write/read or close then reopen with new config.
+3. To change config: close then open_port again (no live reconfigure tool yet).
+
+ERROR HANDLING GUIDANCE
+-----------------------
+invalid_arguments: Fix argument spelling/value; retry.
+Port already open: Use write/read or close first.
+Permission denied / in use: Wait briefly, retry open_port with same params.
+Read timeout (0 bytes): Not an error; optionally retry.
+Unknown tool: Refresh tool list (list_tools) to re-sync.
+
+STATUS STRUCTURE
+----------------
+If open: structured_content.status.status == "Open" and configuration under details.config.
+If closed: structured_content.status.status == "Closed".
+
+READ STRATEGY
+-------------
+Call read in a loop; accumulate bytes until application-level delimiter (e.g. '\n') or length threshold.
+
+WRITE STRATEGY
+--------------
+Send complete command line including delimiter if the target device expects it (e.g., append "\r" or "\n").
+
+RETRY BACKOFF (SUGGESTED)
+-------------------------
+open_port transient failure: exponential backoff 200ms * 2^n (cap at ~3s), up to 6 attempts.
+
+DO NOT
+------
+Assume binary transparency (only UTF-8 write tool provided).
+Attempt simultaneous multi-port access (single port model).
+
+FUTURE (Not Yet Implemented)
+----------------------------
+reconfigure_port tool, binary read/write, streaming subscriptions, multi-port management.

@@ -1,11 +1,14 @@
+#[cfg(not(feature = "mcp"))] // legacy stdio interface only when MCP disabled
 use crate::error::AppError;
-use axum::Json; // for consistent Json<Value> used in closure
-use crate::mcp;
+#[cfg(not(feature = "mcp"))]
 use crate::state::{AppState, PortConfig};
+#[cfg(not(feature = "mcp"))]
 use serde_json::{json, Value};
+#[cfg(not(feature = "mcp"))]
 use std::io::{self, Write};
 
 /// Runs the application in stdio mode, processing JSON commands from stdin.
+#[cfg(not(feature = "mcp"))]
 pub async fn run_stdio_interface(state: AppState) {
     println!("Stdio mode enabled. Send JSON commands. (e.g., {{\"command\": \"help\"}})");
     let mut buffer = String::new();
@@ -47,6 +50,7 @@ pub async fn run_stdio_interface(state: AppState) {
 }
 
 /// Processes a single command received via the stdio interface.
+#[cfg(not(feature = "mcp"))]
 async fn process_stdio_command(json_input: Value, state: AppState) -> Value {
     let command = json_input["command"].as_str().unwrap_or("").to_lowercase();
     let params = json_input.get("params").cloned().unwrap_or(Value::Null);
@@ -72,20 +76,10 @@ async fn process_stdio_command(json_input: Value, state: AppState) -> Value {
     };
 
     let result = match command.as_str() {
-        "list_ports" => mcp::list_available_ports().await,
-        "status" => mcp::get_port_status(state).await,
-        "open" => {
-            let config: Result<PortConfig, _> = serde_json::from_value(params);
-            match config {
-                Ok(c) => mcp::open_port(state, c).await,
-                Err(e) => Err(e.into()),
-            }
+        "list_ports" | "status" | "open" | "write" | "read" | "close" | "help" | "examples" => {
+            // Legacy commands removed under MCP refactor; instruct user
+            Err(AppError::InvalidPayload("Legacy stdio commands deprecated; build without 'mcp' feature for this interface".into()))
         }
-        "write" => mcp::write_to_port(state, params).await,
-        "read" => mcp::read_from_port(state).await,
-        "close" => mcp::close_port(state).await,
-        "help" => mcp::get_mcp_help().await,
-        "examples" => mcp::get_mcp_examples().await,
         "exit" => {
             println!("Exiting stdio mode.");
             std::process::exit(0);
