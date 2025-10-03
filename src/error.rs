@@ -1,22 +1,21 @@
 #[cfg(feature = "rest-api")]
-use axum::{
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    Json,
-};
-use serde_json::json;
+use axum::{http::StatusCode, response::{IntoResponse, Response}};
 use std::fmt;
 
-/// A specialized `Result` type for this application's API handlers.
+#[cfg(feature = "rest-api")]
+use serde_json::json;
+
+/// A specialized `Result` type for REST handlers (only when the rest-api feature is enabled).
+#[cfg(feature = "rest-api")]
 pub type AppResult<T> = Result<T, AppError>;
 
-/// The single, unified error type for the entire application.
+/// Unified application error type.
 ///
-/// This enum represents all possible failures that our service can encounter.
-/// By implementing `IntoResponse`, we can return this enum directly from our
-/// handlers and have Axum automatically convert it into a well-formed JSON
-/// error response.
+/// Most variants are currently used by the legacy stdio or (future) REST interface.
+/// The MCP path relies on `CallToolError` instead; we intentionally keep this
+/// type lightweight and fully non-panicking for compatibility.
 #[derive(Debug)]
+#[allow(dead_code)] // Some variants may be unused depending on feature flags.
 pub enum AppError {
     PortNotOpen,
     PortAlreadyOpen,
@@ -26,16 +25,15 @@ pub enum AppError {
     SerdeError(serde_json::Error),
 }
 
-/// Provides user-friendly, human-readable error messages.
 impl fmt::Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AppError::PortNotOpen => write!(f, "Operation requires an open serial port, but the port is closed."),
-            AppError::PortAlreadyOpen => write!(f, "Port is already open. Close it before trying to open it again."),
-            AppError::InvalidPayload(details) => write!(f, "The request payload is invalid: {}", details),
-            AppError::SerialError(e) => write!(f, "A serial port error occurred: {}", e),
-            AppError::IoError(e) => write!(f, "An I/O error occurred: {}", e),
-            AppError::SerdeError(e) => write!(f, "A serialization/deserialization error occurred: {}", e),
+            Self::PortNotOpen => write!(f, "Operation requires an open serial port, but the port is closed."),
+            Self::PortAlreadyOpen => write!(f, "Port is already open. Close it before trying to open it again."),
+            Self::InvalidPayload(details) => write!(f, "The request payload is invalid: {details}"),
+            Self::SerialError(e) => write!(f, "A serial port error occurred: {e}"),
+            Self::IoError(e) => write!(f, "An I/O error occurred: {e}"),
+            Self::SerdeError(e) => write!(f, "A serialization/deserialization error occurred: {e}"),
         }
     }
 }
@@ -44,24 +42,19 @@ impl fmt::Display for AppError {
 #[cfg(feature = "rest-api")]
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        use axum::http::StatusCode;
         let (status, error_type, error_message) = match self {
-            AppError::PortNotOpen => (StatusCode::CONFLICT, "PortNotOpen", self.to_string()),
-            AppError::PortAlreadyOpen => (StatusCode::CONFLICT, "PortAlreadyOpen", self.to_string()),
-            AppError::InvalidPayload(_) => (StatusCode::BAD_REQUEST, "InvalidPayload", self.to_string()),
-            AppError::SerialError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "SerialError", self.to_string()),
-            AppError::IoError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "IoError", self.to_string()),
-            AppError::SerdeError(_) => (StatusCode::BAD_REQUEST, "DeserializationError", self.to_string()),
+            Self::PortNotOpen => (StatusCode::CONFLICT, "PortNotOpen", self.to_string()),
+            Self::PortAlreadyOpen => (StatusCode::CONFLICT, "PortAlreadyOpen", self.to_string()),
+            Self::InvalidPayload(_) => (StatusCode::BAD_REQUEST, "InvalidPayload", self.to_string()),
+            Self::SerialError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "SerialError", self.to_string()),
+            Self::IoError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "IoError", self.to_string()),
+            Self::SerdeError(_) => (StatusCode::BAD_REQUEST, "DeserializationError", self.to_string()),
         };
 
         let body = axum::Json(json!({
             "status": "error",
-            "error": {
-                "type": error_type,
-                "message": error_message,
-            }
+            "error": { "type": error_type, "message": error_message }
         }));
-
         (status, body).into_response()
     }
 }

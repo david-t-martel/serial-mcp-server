@@ -10,14 +10,13 @@ use std::io::{self, Write};
 /// Runs the application in stdio mode, processing JSON commands from stdin.
 #[cfg(not(feature = "mcp"))]
 pub async fn run_stdio_interface(state: AppState) {
-    println!("Stdio mode enabled. Send JSON commands. (e.g., {{\"command\": \"help\"}})");
+    println!("Legacy stdio mode enabled (MCP feature disabled). Send JSON commands, e.g. {\"command\": \"help\"}.");
     let mut buffer = String::new();
     let stdin = io::stdin();
     loop {
         buffer.clear();
-        print!("> ");
-        // Ensure the prompt is displayed immediately.
-        io::stdout().flush().unwrap_or(());
+    print!("> ");
+    let _ = io::stdout().flush(); // ignore transient flush errors
 
         if stdin.read_line(&mut buffer).is_err() || buffer.trim().is_empty() {
             // Exit on EOF (Ctrl+D) or read error.
@@ -76,9 +75,16 @@ async fn process_stdio_command(json_input: Value, state: AppState) -> Value {
     };
 
     let result = match command.as_str() {
-        "list_ports" | "status" | "open" | "write" | "read" | "close" | "help" | "examples" => {
-            // Legacy commands removed under MCP refactor; instruct user
-            Err(AppError::InvalidPayload("Legacy stdio commands deprecated; build without 'mcp' feature for this interface".into()))
+        "help" => {
+            let help = json!({
+                "status": "ok",
+                "commands": ["help", "exit"],
+                "note": "All operational functionality has moved to the MCP tools interface; rebuild with feature 'mcp' (default) and use tools/call."
+            });
+            Ok(Json(help))
+        }
+        "list_ports" | "status" | "open" | "write" | "read" | "close" | "examples" => {
+            Err(AppError::InvalidPayload("Operational commands removed; enable 'mcp' feature and use MCP tools (method tools/call).".into()))
         }
         "exit" => {
             println!("Exiting stdio mode.");
