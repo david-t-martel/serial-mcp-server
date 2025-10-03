@@ -1,5 +1,6 @@
 #[cfg(feature = "rest-api")] use axum::{extract::{Json, State}, routing::{get, post}, Router};
 use clap::Parser;
+use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
@@ -7,9 +8,11 @@ use tokio::signal;
 
 // Declare modules for better code organization
 mod error;
-mod mcp; // new MCP sdk implementation (stdio MCP by default)
+mod mcp; // MCP sdk implementation
 mod state;
 mod stdio;
+mod session;
+#[cfg(feature = "rest-api")] mod rest_api;
 
 #[cfg(feature = "rest-api")] use crate::error::AppResult;
 use crate::state::{AppState, PortState};
@@ -18,7 +21,7 @@ use crate::state::{AppState, PortState};
 #[derive(Parser, Debug)]
 #[command(
     author = "Gemini",
-    version = "3.0.0",
+    version = "3.1.0",
     about = "A robust, production-grade serial port server with a rich MCP interface for LLM agents.",
     long_about = "Provides a highly reliable, cross-platform HTTP and stdio interface for controlling serial ports. Features structured error handling and self-documentation for seamless integration with automated agents."
 )]
@@ -36,39 +39,68 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+    // Initialize tracing subscriber once. Keep stdout clean for MCP framed protocol; send logs to stderr.
+    let env_filter = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into());
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_writer(std::io::stderr)
+        .try_init();
     // Initialize the shared application state
     let app_state: AppState = Arc::new(Mutex::new(PortState::default()));
+    // Initialize session store. Default to on-disk file (sessions.db). Allow override via env SESSION_DB_URL.
+    // If the on-disk database cannot be opened (common in CI / read-only or sandboxed environments),
+    // fall back to an in-memory shared SQLite instance so the server can still start and tests pass.
+    let db_url = std::env::var("SESSION_DB_URL").unwrap_or_else(|_| "sqlite://sessions.db".to_string());
+    let session_store = match session::SessionStore::new(&db_url).await {
+        Ok(store) => store,
+        Err(e) => {
+            tracing::warn!(error = %e, db_url, "Failed to open session database; falling back to in-memory");
+            session::SessionStore::new("sqlite::memory:?cache=shared").await?
+        }
+    };
 
+    // If the --server flag is provided (and REST feature enabled), launch HTTP server; otherwise always fall back to
+    // stdio MCP (preferred) or legacy stdio if MCP feature is disabled. This keeps a consistent developer UX and
+    // preserves the ability to run headless via stdio even when "rest-api" feature remains enabled.
     #[cfg(feature = "rest-api")]
-    if args.server {
-        // --- HTTP Server Mode ---
-        let app = Router::new()
-            .route("/health", get(|| async { "ok" }))
-            // Placeholder endpoints (legacy REST removed). Provide minimal surface until redesigned.
-            .with_state(app_state);
+    {
+        if args.server {
+            // --- HTTP Server Mode ---
+            let rest_ctx = rest_api::RestContext { state: app_state.clone(), sessions: std::sync::Arc::new(session_store.clone()) };
+            let app = rest_api::build_router(rest_ctx);
 
-        let addr = SocketAddr::from(([127, 0, 0, 1], args.port));
-        println!("Robust Serial MCP Server v3.0");
-        println!("Starting server on http://{}", addr);
-        println!("Use GET /mcp/help for API documentation.");
+            let addr = SocketAddr::from(([127, 0, 0, 1], args.port));
+            tracing::info!(version = env!("CARGO_PKG_VERSION"), %addr, "Starting HTTP server (REST + MCP stdio)");
 
-        let listener = TcpListener::bind(addr).await?;
-        axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal())
-            .await?;
-    } 
+            let listener = TcpListener::bind(addr).await?;
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown_signal())
+                .await?;
+        } else {
+            // --- STDIO Mode (MCP preferred) ---
+            #[cfg(feature = "mcp")] {
+                tracing::info!("Serial MCP Server starting (stdio MCP mode)");
+                if let Err(e) = mcp::start_mcp_server_stdio(app_state.clone(), session_store).await {
+                    tracing::error!(error = %e, "MCP server exited with error");
+                }
+            }
+            #[cfg(not(feature = "mcp"))] {
+                tracing::warn!("MCP feature disabled, falling back to legacy stdio JSON mode");
+                stdio::run_stdio_interface(app_state.clone()).await;
+            }
+        }
+    }
     #[cfg(not(feature = "rest-api"))]
     {
-        // Prefer MCP stdio when mcp feature enabled
         #[cfg(feature = "mcp")] {
-            println!("Serial MCP Server (official SDK) starting in stdio MCP mode");
-            if let Err(e) = mcp::start_mcp_server_stdio(app_state.clone()).await {
-                eprintln!("MCP server exited with error: {e}");
+            tracing::info!("Serial MCP Server starting (stdio MCP mode)");
+            if let Err(e) = mcp::start_mcp_server_stdio(app_state.clone(), session_store).await {
+                tracing::error!(error = %e, "MCP server exited with error");
             }
         }
         #[cfg(not(feature = "mcp"))] {
-            println!("MCP feature disabled, falling back to legacy stdio JSON mode");
-            stdio::run_stdio_interface(app_state).await;
+            tracing::warn!("MCP feature disabled, falling back to legacy stdio JSON mode");
+            stdio::run_stdio_interface(app_state.clone()).await;
         }
     }
 
@@ -88,17 +120,12 @@ async fn http_list_ports() -> AppResult<axum::Json<serde_json::Value>> { Err(cra
 // --- Graceful Shutdown Handler ---
 async fn shutdown_signal() {
     let ctrl_c = async {
-        signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
+        if let Err(e) = signal::ctrl_c().await { tracing::warn!(error = %e, "failed to install Ctrl+C handler"); }
     };
 
     #[cfg(unix)]
     let terminate = async {
-        signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("failed to install signal handler")
-            .recv()
-            .await;
+        if let Ok(mut sig) = signal::unix::signal(signal::unix::SignalKind::terminate()) { sig.recv().await; } else { tracing::warn!("failed to install terminate signal handler"); }
     };
 
     #[cfg(not(unix))]
@@ -109,6 +136,6 @@ async fn shutdown_signal() {
         _ = terminate => {},
     }
 
-    println!("\nSignal received, starting graceful shutdown...");
+    tracing::info!("Signal received, starting graceful shutdown...");
 }
 
