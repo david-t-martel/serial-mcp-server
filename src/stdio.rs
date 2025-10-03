@@ -1,4 +1,5 @@
 use crate::error::AppError;
+use axum::Json; // for consistent Json<Value> used in closure
 use crate::mcp;
 use crate::state::{AppState, PortConfig};
 use serde_json::{json, Value};
