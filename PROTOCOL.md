@@ -1,222 +1,169 @@
-# MCP Serial Server Protocol & Persistence Schema
+Machine Control Protocol (MCP) Transport & Tooling Contract
+===========================================================
 
-> Version: 0.1 (2025-10-03) – Draft documenting current implementation state. Will evolve as framing strictness and multi‑port support are added.
+Version: 2025-10-03 (synchronized with code at commit time)
 
-## 1. Transport Layer
+Overview
+--------
 
-The server uses **MCP (Machine Control Protocol)** over STDIO via `rust-mcp-sdk`.
-All outbound messages MUST be framed with HTTP‑style headers:
+This server implements the emerging MCP JSON-RPC 2.0 based tool invocation model
+using the `rust-mcp-sdk` and its stdio transport. The transport (as currently
+implemented by `rust-mcp-transport`) reads newline-delimited JSON objects from
+STDIN and writes newline-delimited JSON to STDOUT. Classic `Content-Length:`
+framing is therefore OPTIONAL on the client side. The server never emits
+`Content-Length` prefixed frames; it writes a single JSON object per line.
 
-```text
-Content-Length: <bytes>\r\n
-Content-Type: application/json\r\n
-\r\n
-<JSON payload>
-```
+Initialization Sequence
+-----------------------
 
-Current State: Most responses are framed by the SDK. An optional early debug frame can be emitted when the environment variable `MCP_DEBUG_BOOT` is set. A known gap exists around reliably observing the *initialize* response under stress; strict framing tests are planned.
+1. (Optional) Heartbeat notification: Unless the environment variable
+   `MCP_DISABLE_HEARTBEAT` is set, the server emits a one-line JSON notification:
+   `{ "jsonrpc":"2.0", "method":"_heartbeat", "params":{} }`
+   immediately after startup. Clients MAY ignore unknown notifications.
+2. Client sends standard MCP initialize request (JSON-RPC 2.0 request object).
+3. Server replies with `InitializeResult` including `protocol_version` set to
+   the current SDK's `LATEST_PROTOCOL_VERSION` constant.
+4. Client issues `list_tools` (method `tools/list` or via higher-level SDK helper).
+5. Client invokes tools via `tools/call` JSON-RPC method.
 
-Planned Tightening:
+Method Names
+------------
 
-- Eliminate any reliance on raw (unframed) fallback parsing in tests.
-- Add a startup heartbeat frame (minimal `{}` JSON) if initialize is delayed beyond a short threshold.
+The correct JSON-RPC method for invoking a tool is `tools/call`.
+Legacy / deprecated aliases such as `callTool` are NOT supported and will
+produce JSON-RPC error `-32601` (method not found).
 
-## 2. Initialization Flow
+Tool Invocation Shape
+---------------------
 
-Client sequence:
-
-1. Launch process (captures stdin/stdout pipes).
-2. Send MCP `initialize` request per spec.
-3. Read framed `initialize` result (server details + capabilities).
-4. Call `tools/list` to enumerate supported tools.
-
-Server responds with capabilities advertising the tool surface. No authentication is currently implemented.
-
-## 3. Tool Invocation Contract
-
-Each tool invocation is a JSON-RPC request via MCP method namespace (e.g. `tools/call`). Parameters are passed via `arguments` map (string → JSON value). The server returns:
+Request:
 
 ```json
 {
-  "content": [{ "type": "text", "text": "<human summary>" }],
-  "structured_content": { /* machine-friendly fields */ }
+  "jsonrpc": "2.0",
+  "id": 42,
+  "method": "tools/call",
+  "params": {
+    "name": "open_port",
+    "arguments": {
+      "port_name": "COM3",
+      "baud_rate": 115200,
+      "timeout_ms": 500,
+      "data_bits": "eight",
+      "parity": "none",
+      "stop_bits": "one",
+      "flow_control": "none",
+      "terminator": "\n",
+      "idle_disconnect_ms": 60000
+    }
+  }
 }
 ```
 
-Errors use `CallToolError` (`invalid_arguments`, `unknown_tool`, or message-bearing error) surfaced in the MCP error channel.
+Success Response (abridged):
 
-## 4. Serial Port State Machine
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 42,
+  "result": {
+    "content": [{"type":"text","text":"opened"}],
+    "structured_content": { "port_name": "COM3" }
+  }
+}
+```
 
-State Enum (single-port current design):
+Error Response (invalid argument example):
 
-- `Closed`
-- `Open { port, config, last_activity, timeout_streak, bytes_read_total, bytes_written_total, idle_close_count, open_started }`
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 42,
+  "error": { "code": -32002, "message": "invalid arguments: baud_rate missing" }
+}
+```
 
-Metrics reset whenever a port is (re)opened.
+Exact error codes are determined by `rust-mcp-sdk`'s `CallToolError` mapping;
+`-32601` is reserved for method (not tool) unknown.
 
-### Auto-Close Behavior
+Available Tools
+---------------
 
-If `idle_disconnect_ms` is configured and no successful read/write occurs within that interval, a `read` invocation triggers an auto-close:
+See `README.md` for a human friendly list. Programmatically, call `list_tools`.
+
+Streaming / Incremental Output
+------------------------------
+
+Not yet supported. Future work may add subscription or streaming chunk tools.
+
+Heartbeat Behavior
+------------------
+
+Purpose: Aid harnesses/tests in quickly detecting that the server process is
+alive before the initialize request/response completes. Disable by exporting
+`MCP_DISABLE_HEARTBEAT=1` in the environment to produce a quieter stdout.
+
+Framing Compatibility
+---------------------
+
+Clients sending `Content-Length:` framed messages (per some JSON-RPC transport
+conventions) will still function; the underlying reader strips either newline
+delimited payloads or parses framed messages (depending on future library
+evolution). This server emits only newline-delimited JSON (one object per line).
+
+Backward / Forward Compatibility Notes
+--------------------------------------
+
+* Adding new tools is a backward compatible extension (clients MUST ignore
+  unknown tools until they choose to invoke them).
+* Removing or renaming tools is a breaking change (requires a major version bump).
+* Structured content fields are additive—clients should tolerate unknown keys.
+* The heartbeat notification is optional and may gain fields.
+
+Session Persistence Semantics
+-----------------------------
+
+* `create_session` returns a JSON object with a unique `session_id` (UUID derived).
+* `append_message` returns `message_id` (monotonically increasing per session) and ISO8601 `created_at`.
+* Ordering: `message_id` is guaranteed to increase strictly by 1 per append inside a session.
+* Feature tags are opaque strings separated by space or comma; the server does not enforce a taxonomy.
+
+Idle Auto-Close Event
+---------------------
+
+When `idle_disconnect_ms` is configured and the threshold elapses with no
+successful I/O, the next `read` returns an auto-close event:
 
 ```json
 {
   "event": "auto_close",
   "reason": "idle_timeout",
-  "idle_ms": <threshold>,
-  "idle_close_count": <n>
+  "idle_ms": 60000,
+  "idle_close_count": 1
 }
 ```
 
-### Timeout Streak
+Clients may reopen with `open_port` immediately.
 
-A `read` that returns 0 bytes due to timeout increments `timeout_streak`. Any successful read resets it to 0. Exposed via `metrics`.
+Testing Guidance
+----------------
 
-## 5. Serial Configuration Model
+Integration tests parse either newline-delimited or framed JSON (defensive).
+If authoring new tests prefer the canonical newline-delimited form for clarity.
 
-```rust
-struct PortConfig {
-  port_name: String,
-  baud_rate: u32,
-  timeout_ms: u64,
-  data_bits: String,   // five|six|seven|eight
-  parity: String,      // none|odd|even
-  stop_bits: String,   // one|two
-  flow_control: String,// none|hardware|software
-  terminator: Option<String>,
-  idle_disconnect_ms: Option<u64>,
-}
-```
+Planned Extensions (Roadmap)
+----------------------------
 
-### Terminator Semantics
+* Pagination cursors for `list_messages` / `filter_messages`.
+* `describe_port` tool returning extended hardware metadata.
+* Streaming read subscription (push model) to reduce polling.
+* Structured error taxonomy (machine-readable codes for common serial failures).
 
-- On `write`: appended if not already present.
-- On `read`: exactly one trailing instance trimmed (if present) prior to returning `data`.
+Change Log (Protocol Doc)
+------------------------
 
-## 6. Tools (Current Set)
-
-| Tool | Purpose | Notes |
-|------|---------|-------|
-| `list_ports` | Enumerate system serial ports | Port objects may include additional OS-specific metadata (future). |
-| `open_port` | Open port with provided settings | Fails if already open. |
-| `write` | Write UTF-8 data | Adds terminator if configured. |
-| `read` | Read up to 1024 bytes | Non-blocking beyond timeout; trims terminator. |
-| `close` | Idempotent close | Succeeds if already closed. |
-| `status` | Return current port state | Embeds serialized `PortState`. |
-| `metrics` | Counters & timing | Now includes `timeout_streak`. |
-| `reconfigure_port` | Open or reopen with new config | Resets metrics; port name optional if already open. |
-| `create_session` | Start persistent session | Returns session id (UUID). |
-| `append_message` | Append timeline entry | Extended metadata supported. |
-| `list_messages` | Sequential listing | Ascending by autoincrement id. |
-| `export_session` | Full session dump | Includes messages array. |
-| `filter_messages` | Filtered subset | Role / feature substring / direction. |
-| `feature_index` | Feature tag aggregation | Map of token → count. |
-| `session_stats` | Lightweight stats | count, last id, rate (messages/min). |
-
-## 7. Persistence Schema (SQLite)
-
-Autocreated via `SessionStore::new` migrations.
-
-### Tables
-
-```sql
-CREATE TABLE sessions (
-  id TEXT PRIMARY KEY,
-  device_id TEXT NOT NULL,
-  port_name TEXT NULL,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  closed_at TEXT NULL
-);
-
-CREATE TABLE messages (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-  role TEXT NOT NULL,
-  direction TEXT NULL,
-  content TEXT NOT NULL,
-  features TEXT NULL,
-  latency_ms INTEGER NULL,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-### Ordering & Determinism
-
-Message ordering uses the monotonically increasing `id`. The `append_message` tool returns `(message_id, created_at)` allowing exact reconstruction and verification (tests assert ordering under rapid insertion).
-
-## 8. Device Discovery (Forward-Looking)
-
-Current `list_ports` exposes minimal port_name. Planned enrichment:
-
-- Vendor / Product IDs (VID/PID) where available.
-- Serial number, manufacturer, description.
-- Transport type inference (USB-UART, PCI, Bluetooth SPP, etc.).
-- Capability flags (e.g., supports high baud > 1M, RS485 direction control, etc.).
-
-Non‑FTDI Support Strategy:
-
-- Abstract detection logic: gather all ports; attempt OS-specific metadata extraction (Windows via `SetupAPI`, Linux via `/sys/class/tty/*/device/..` udev properties, macOS via IOKit). Populate a unified `DiscoveredPort` struct.
-- Provide future `describe_port` tool returning extended metadata.
-- Heuristic classification (match common driver names: `FTDI`, `Silicon Labs`, `Prolific`, `CH34x`, `CP21xx`).
-
-## 9. Reconfiguration Semantics
-
-`reconfigure_port` will:
-
-- Determine target port name (argument or currently open one).
-- Open a new port handle with provided settings (dropping previous handle).
-- Reset all metrics counters and `timeout_streak`.
-- Return structured reflection of new config.
-
-## 10. Session Analytics & Feature Index
-
-`feature_index` tokenizes the raw `features` string field by splitting on whitespace and commas. Future iteration will introduce a `message_features` linking table for normalized many‑to‑many relations enabling precise counts and advanced queries (e.g., co‑occurrence).
-
-## 11. Hardware Loopback Validation Procedure
-
-A dedicated self-test will:
-
-1. Discover candidate port pair (auto or via `LOOPBACK_PORT_A` / `LOOPBACK_PORT_B`).
-2. For a suite of baud rates `[9600, 19200, 38400, 57600, 115200, 230400]`:
-   - Reconfigure port.
-   - Send framed test lines with sequence, timestamp, CRC32.
-   - Measure round-trip or one-way latency (depending on cross-loop wiring).
-3. Track success ratio, latency distribution, throughput.
-4. Emit JSON summary for machine ingestion + human table.
-5. Optionally reverse direction.
-
-## 12. Planned Extensions
-
-- Multi-port: Map of `port_name -> PortState` with handles; tools gain `port_name` parameter.
-- Binary Mode: `write_binary` / `read_binary` with base64 or raw framing + length prefix.
-- Streaming Subscriptions: Server → client push when new data arrives without polling.
-- Structured Error Codes: Replace generic messages with enumerated codes (`ERR_PORT_BUSY`, `ERR_DB_WRITE`, etc.).
-
-## 13. Compatibility & Stability
-
-Stability tiers:
-
-- Stable: Basic serial tools (`list_ports`, `open_port`, `write`, `read`, `close`, `status`, `metrics`).
-- Beta: Session analytics tools.
-- Experimental: `reconfigure_port` (new), planned discovery enrichment.
-
-Breaking changes will be noted in `CHANGELOG.md` and versioned semantically.
-
-## 14. Security Considerations
-
-Current implementation has no auth. Planned:
-
-- Capability allowlist configuration file.
-- Optional signing of tool requests.
-- Rate limiting per tool (particularly `read`).
-
-## 15. Reference Client Notes
-
-Clients should:
-
-- Buffer partial reads to reconstruct semantic messages.
-- Backoff on consecutive timeouts (exponential strategy) or adjust timeout_ms.
-- Use `metrics` deltas for health dashboards.
-- Persist session ids externally for later export / analytics.
+2025-10-03: Initial extraction of protocol details into PROTOCOL.md. Clarified
+method naming (`tools/call`), heartbeat semantics, and framing expectations.
 
 ---
 Generated: 2025-10-03

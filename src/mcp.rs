@@ -229,7 +229,7 @@ impl SerialServerHandler {
                 // Check idle auto-close without mut-borrowing st inside the pattern
                 let should_close_idle = bytes_read == 0 && config.idle_disconnect_ms.map(|ms| last_activity.elapsed() >= Duration::from_millis(ms)).unwrap_or(false);
                 if should_close_idle {
-                    if let Some(ms) = config.idle_disconnect_ms { *idle_close_count += 1; }
+                    if let Some(_ms) = config.idle_disconnect_ms { *idle_close_count += 1; }
                     let count = *idle_close_count;
                     let ms = config.idle_disconnect_ms.unwrap_or(0);
                     // Drop match before mutating the overall enum to avoid double borrow
@@ -567,12 +567,19 @@ pub async fn start_mcp_server_stdio(state: AppState, session_store: crate::sessi
         protocol_version: LATEST_PROTOCOL_VERSION.to_string(),
     };
     let transport = StdioTransport::new(TransportOptions::default())?;
-    // Optional: emit a debug frame very early to verify stdout framing in test environments.
-    // This helps diagnose situations where the SDK does not appear to respond to initialize.
+    // Early heartbeat (now newline-delimited JSON to match rust-mcp-transport's line-based stdio protocol).
+    // The underlying StdioTransport reads newline-delimited JSON objects (not Content-Length frames),
+    // so we emit a lightweight notification line early to help test harnesses detect that the server
+    // is alive without relying on a manual framed message. Disable via MCP_DISABLE_HEARTBEAT.
+    if std::env::var("MCP_DISABLE_HEARTBEAT").is_err() {
+        let hb_body = serde_json::json!({"jsonrpc":"2.0","method":"_heartbeat","params":{}}).to_string();
+        if let Err(e) = writeln!(std::io::stdout(), "{}", hb_body) { tracing::warn!(error=%e, "failed to write heartbeat JSON"); }
+        let _ = std::io::stdout().flush();
+    }
+    // Optional debug boot frame
     if std::env::var("MCP_DEBUG_BOOT").is_ok() {
         let debug_body = serde_json::json!({"debug":"boot_marker"}).to_string();
-        let frame = format!("Content-Length: {}\r\nContent-Type: application/json\r\n\r\n{}", debug_body.as_bytes().len(), debug_body);
-        if let Err(e) = write!(std::io::stdout(), "{}", frame) { tracing::error!(error = %e, "failed to write debug boot frame"); }
+        if let Err(e) = writeln!(std::io::stdout(), "{}", debug_body) { tracing::error!(error = %e, "failed to write debug boot marker"); }
         let _ = std::io::stdout().flush();
     }
     // Use the provided session store (caller is responsible for lifecycle)
