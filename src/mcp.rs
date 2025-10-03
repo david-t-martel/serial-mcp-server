@@ -115,6 +115,10 @@ pub struct FeatureIndexTool { pub session_id: String }
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct SessionStatsTool { pub session_id: String }
 
+#[mcp_tool(name = "list_ports_extended", description = "List serial ports with extended metadata (VID/PID, manufacturer, product, serial number, type)")]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct ListPortsExtendedTool {}
+
 // Future: binary read/write, streaming subscriptions, configure line endings, etc.
 
 // ------------------ Handler ------------------
@@ -125,12 +129,37 @@ pub struct SerialServerHandler {
 
 impl SerialServerHandler {
     fn list_ports_impl(&self) -> Result<CallToolResult, CallToolError> {
-    let ports = serialport::available_ports().map_err(|e| CallToolError::from_message(e.to_string()))?;
+        let ports = serialport::available_ports().map_err(|e| CallToolError::from_message(e.to_string()))?;
         let names: Vec<_> = ports.into_iter().map(|p| json!({"port_name": p.port_name})).collect();
         let mut structured = serde_json::Map::new();
         structured.insert("ports".into(), serde_json::Value::Array(names));
         Ok(CallToolResult::text_content(vec![TextContent::from("ports listed".to_string())])
             .with_structured_content(structured))
+    }
+    fn list_ports_extended_impl(&self) -> Result<CallToolResult, CallToolError> {
+        use serialport::SerialPortType;
+        let ports = serialport::available_ports().map_err(|e| CallToolError::from_message(e.to_string()))?;
+        let detailed: Vec<_> = ports.into_iter().map(|p| {
+            let mut obj = serde_json::Map::new();
+            obj.insert("port_name".into(), json!(p.port_name));
+            match p.port_type {
+                SerialPortType::UsbPort(info) => {
+                    obj.insert("transport".into(), json!("usb"));
+                    obj.insert("vid".into(), json!(format!("0x{:04x}", info.vid)));
+                    obj.insert("pid".into(), json!(format!("0x{:04x}", info.pid)));
+                    if let Some(sn) = info.serial_number { obj.insert("serial_number".into(), json!(sn)); }
+                    if let Some(mf) = info.manufacturer { obj.insert("manufacturer".into(), json!(mf)); }
+                    if let Some(prod) = info.product { obj.insert("product".into(), json!(prod)); }
+                }
+                SerialPortType::BluetoothPort => { obj.insert("transport".into(), json!("bluetooth")); }
+                SerialPortType::PciPort => { obj.insert("transport".into(), json!("pci")); }
+                SerialPortType::Unknown => { obj.insert("transport".into(), json!("unknown")); }
+            }
+            json!(obj)
+        }).collect();
+        let mut structured = serde_json::Map::new();
+        structured.insert("ports".into(), serde_json::Value::Array(detailed));
+        Ok(CallToolResult::text_content(vec![TextContent::from("ports detailed".to_string())]).with_structured_content(structured))
     }
     fn open_port_impl(&self, tool: OpenPortTool) -> Result<CallToolResult, CallToolError> {
     let mut st = self.state.lock().map_err(|_| CallToolError::from_message("State lock poisoned"))?;
@@ -363,6 +392,7 @@ impl ServerHandler for SerialServerHandler {
     async fn handle_list_tools_request(&self, _req: ListToolsRequest, _rt: Arc<dyn McpServer>) -> Result<ListToolsResult, RpcError> {
         Ok(ListToolsResult { tools: vec![
             ListPortsTool::tool(),
+            ListPortsExtendedTool::tool(),
             OpenPortTool::tool(),
             WriteTool::tool(),
             ReadTool::tool(),
@@ -384,6 +414,7 @@ impl ServerHandler for SerialServerHandler {
     async fn handle_call_tool_request(&self, req: CallToolRequest, _rt: Arc<dyn McpServer>) -> Result<CallToolResult, CallToolError> {
         match req.tool_name() {
             n if n == ListPortsTool::tool_name() => self.list_ports_impl(),
+            n if n == ListPortsExtendedTool::tool_name() => self.list_ports_extended_impl(),
             n if n == OpenPortTool::tool_name() => {
                 // Manually parse args from request params
                 let args = req.params.arguments.clone().unwrap_or_default();
