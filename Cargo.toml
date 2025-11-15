@@ -1,6 +1,6 @@
 [package]
 name = "serial_mcp_agent"
-version = "3.0.0"
+version = "3.1.0"
 edition = "2021"
 authors = ["Gemini"]
 description = "A robust, production-grade serial port server with a rich MCP interface for LLM agents."
@@ -19,6 +19,14 @@ serialport = "4.3.0"
 tokio = { version = "1.47.1", features = ["full"] }
 rust-mcp-sdk = { version = "0.7.0", default-features = false, optional = true, features = ["server","macros","stdio","streamable-http","hyper-server","2025_06_18"] }
 async-trait = { version = "0.1.83", optional = false }
+sqlx = { version = "0.7.4", features = ["runtime-tokio-rustls","sqlite","macros","uuid","chrono"] }
+uuid = { version = "1.8.0", features = ["v4","serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+once_cell = "1.19.0"
+regex = "1.11"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+memchr = "2.7.6"
 
 [features]
 default = ["mcp","rest-api"]

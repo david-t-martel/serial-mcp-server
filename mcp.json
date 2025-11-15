@@ -1,0 +1,35 @@
+{
+  "name": "serial-mcp-agent",
+  "description": "Serial Port MCP Server (v3.1) with metrics, session analytics, and robust tooling",
+  "version": "3.1.0",
+  "entry": {
+    "command": "serial_mcp_agent",
+    "args": [],
+    "transport": "stdio"
+  },
+  "tools": [
+    "list_ports",
+    "open_port",
+    "write",
+    "read",
+    "close",
+    "status",
+    "metrics",
+    "create_session",
+    "append_message",
+    "list_messages",
+    "export_session",
+    "filter_messages",
+    "feature_index"
+  ],
+  "env": {
+    "RUST_LOG": "info",
+    "SESSION_DB_URL": "sqlite://sessions.db"
+  },
+  "documentation": {
+    "readme": "README.md",
+    "architecture": "ARCHITECTURE.md",
+    "testing": "TESTING.md",
+    "cheatsheet": "llms.txt"
+  }
+}

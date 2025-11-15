@@ -4,13 +4,20 @@ LLM / Agent Integration Cheat Sheet
 Purpose: Operate a single serial port via MCP tools exposed by this process.
 
 TOOLS
-------
-list_ports  -> Enumerate available system serial ports.
-open_port   -> Open with configuration.
-write       -> Write UTF-8 data (string) to the open port.
-read        -> Read up to 1024 bytes (0 bytes on timeout, not an error).
-close       -> Close the port (idempotent).
-status      -> Return current state + configuration if open.
+-----
+list_ports       -> Enumerate available system serial ports.
+open_port        -> Open with configuration (supports terminator + idle auto-disconnect).
+write            -> Write UTF-8 data (auto-appends terminator if configured & missing).
+read             -> Read up to 1024 bytes (0 bytes on timeout, trims configured terminator if present).
+close            -> Close the port (idempotent).
+status           -> Return current state + configuration if open.
+metrics          -> Return cumulative IO metrics & timing for the current port session.
+create_session   -> Create persistent log session (returns session id).
+append_message   -> Append (role, content, direction?, features?, latency_ms?) to a session.
+list_messages    -> List session messages (ascending; optional limit).
+filter_messages  -> Filter messages by role / feature substring / direction.
+feature_index    -> Aggregate feature tag counts.
+export_session   -> Export session + messages as structured JSON.
 
 OPEN_PORT ARGUMENTS
 -------------------
@@ -21,6 +28,8 @@ data_bits   (five|six|seven|eight, default eight; accepts 5..8 numerically)
 parity      (none|odd|even, default none)
 stop_bits   (one|two, default one)
 flow_control (none|hardware|software, default none)
+terminator (string optional; e.g. "\n" or "\r\n")
+idle_disconnect_ms (u64 optional; auto-close after inactivity ms)
 
 SAMPLE CALL (pseudo JSON-RPC tools/call)
 ---------------------------------------
@@ -45,6 +54,8 @@ COMMON FLOWS
 1. Initialize -> list_ports -> choose port -> open_port -> write/read loop -> close.
 2. If open_port fails with "Port already open": either proceed with write/read or close then reopen with new config.
 3. To change config: close then open_port again (no live reconfigure tool yet).
+4. For persistent audit: create_session first; after each meaningful device line or action, append_message.
+5. Periodically export_session for checkpointing / external storage.
 
 ERROR HANDLING GUIDANCE
 -----------------------
@@ -61,11 +72,11 @@ If closed: structured_content.status.status == "Closed".
 
 READ STRATEGY
 -------------
-Call read in a loop; accumulate bytes until application-level delimiter (e.g. '\n') or length threshold.
+Call read in a loop; accumulate bytes until application-level delimiter (e.g. '\n') or length threshold. If a terminator is configured, the returned text already has one trailing instance removed.
 
 WRITE STRATEGY
 --------------
-Send complete command line including delimiter if the target device expects it (e.g., append "\r" or "\n").
+Write tool auto-appends configured terminator if it's missing; you can send raw command body only.
 
 RETRY BACKOFF (SUGGESTED)
 -------------------------
@@ -75,7 +86,19 @@ DO NOT
 ------
 Assume binary transparency (only UTF-8 write tool provided).
 Attempt simultaneous multi-port access (single port model).
+Rely on idle timeouts for precise timing—it's a safety net, not a scheduling primitive.
+
+OBSERVABILITY
+-------------
+metrics structured fields (when open): state, bytes_read_total, bytes_written_total, idle_close_count, open_duration_ms, last_activity_ms.
+Auto-close event (read tool structured_content) when idle_disconnect_ms elapses:
+  {"event":"auto_close","reason":"idle_timeout","idle_ms":<threshold>,"idle_close_count":<count>}
+
+FEATURE TAGGING
+---------------
+Use append_message.features for space/comma separated tokens (e.g. "temp voltage ack").
+feature_index splits on whitespace / commas and counts occurrences across session.
 
 FUTURE (Not Yet Implemented)
-----------------------------
-reconfigure_port tool, binary read/write, streaming subscriptions, multi-port management.
+-----------------------------
+reconfigure_port tool, binary read/write, streaming subscriptions, multi-port management, richer metrics (error counters, throughput EWMA).

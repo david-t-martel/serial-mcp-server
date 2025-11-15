@@ -1,0 +1,24 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"terminal.integrated.defaultProfile.windows": "PowerShell",
+		"rust-analyzer.cargo.features": "all",
+		"rust-analyzer.procMacro.enable": true,
+		"rust-analyzer.cargo.buildScripts.enable": true,
+		"rust-analyzer.linkedProjects": [
+			"${workspaceFolder}/Cargo.toml"
+		],
+		"rust-analyzer.diagnostics.disabled": [
+			"inactive-code"
+		],
+		"rust-analyzer.cargo.extraEnv": {
+			"RUSTC_WRAPPER": "sccache"
+		},
+		"explorer.compactFolders": false,
+		"rust-analyzer.checkOnSave": false
+	}
+}

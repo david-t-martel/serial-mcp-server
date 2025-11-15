@@ -1,9 +1,14 @@
 # Rust / Cargo
+/# Legacy default target (unused now)
 /target/
+# New custom build output directory
+/targets/
 Cargo.lock
 
 # Logs
 sccache-error.log
+.pre-commit-config.yaml
+.pre-commit-cache/
 
 # VS Code
 .vscode/
