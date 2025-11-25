@@ -1,0 +1,28 @@
+# cargo-release configuration
+# https://github.com/crate-ci/cargo-release
+
+[workspace]
+allow-branch = ["main"]
+sign-commit = false
+sign-tag = false
+push = true
+publish = false  # Not publishing to crates.io
+
+# Pre-release checks
+pre-release-commit-message = "chore: release {{version}}"
+tag-message = "{{crate_name}} v{{version}}"
+tag-name = "v{{version}}"
+
+# Pre-release hooks
+pre-release-hook = ["git", "cliff", "-o", "CHANGELOG.md", "--tag", "{{version}}"]
+pre-release-replacements = [
+  { file = "README.md", search = "serial_mcp_agent v[0-9]+\\.[0-9]+\\.[0-9]+", replace = "serial_mcp_agent v{{version}}" },
+  { file = "CHANGELOG.md", search = "\\[Unreleased\\]", replace = "[{{version}}] - {{date}}", exactly = 1 },
+]
+
+# Post-release
+post-release-commit-message = "chore: begin {{next_version}} development"
+
+# Consolidate commits
+consolidate-commits = true
+consolidate-pushes = true

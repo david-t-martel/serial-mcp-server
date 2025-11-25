@@ -1,0 +1,22 @@
+# Rust formatting configuration for rust-comm
+# Edition alignment with Cargo.toml
+edition = "2021"
+
+# Line width and spacing
+max_width = 100
+tab_spaces = 4
+use_small_heuristics = "Default"
+
+# Import organization
+imports_granularity = "Crate"
+group_imports = "StdExternalCrate"
+reorder_imports = true
+reorder_modules = true
+
+# Code formatting
+format_code_in_doc_comments = true
+format_strings = false
+
+# Comment formatting
+wrap_comments = true
+comment_width = 80
