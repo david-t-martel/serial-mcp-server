@@ -6,6 +6,8 @@
 //! - JSON assertion helpers
 //! - Common test data builders
 
+#![allow(dead_code)]
+
 use serde_json::Value;
 use serial_mcp_agent::port::{MockSerialPort, SerialPortAdapter};
 use serial_mcp_agent::session::SessionStore;

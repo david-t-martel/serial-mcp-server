@@ -8,6 +8,9 @@
 //! cargo run --example async_port_usage --features async-serial
 //! ```
 
+#![allow(clippy::field_reassign_with_default)]
+#![allow(dead_code)]
+
 #[cfg(feature = "async-serial")]
 use serial_mcp_agent::port::{
     AsyncSerialPortAdapter, BlockingSerialPortWrapper, PortConfiguration, TokioSerialPort,

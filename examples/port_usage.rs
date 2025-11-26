@@ -3,9 +3,10 @@
 //! This example shows how to use both the real `SyncSerialPort` and `MockSerialPort`
 //! for serial communication with dependency injection.
 
-use serial_mcp_agent::port::{
-    MockSerialPort, PortConfiguration, SerialPortAdapter,
-};
+#![allow(clippy::field_reassign_with_default)]
+#![allow(dead_code)]
+
+use serial_mcp_agent::port::{MockSerialPort, PortConfiguration, SerialPortAdapter};
 use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

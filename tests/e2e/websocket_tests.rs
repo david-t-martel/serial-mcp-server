@@ -4,15 +4,16 @@
 //! including data streaming, command handling, and connection management.
 
 #![cfg(all(feature = "rest-api", feature = "websocket"))]
+#![allow(clippy::assertions_on_constants)]
 
 use futures::{SinkExt, StreamExt};
+use serde_json::json;
 use serial_mcp_agent::{
     port::MockSerialPort,
     rest_api::RestContext,
     session::SessionStore,
     state::{AppState, PortConfig, PortState},
 };
-use serde_json::json;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::TcpListener;
@@ -60,9 +61,11 @@ async fn start_test_server(app_state: AppState) -> String {
         .await
         .expect("Failed to create session store");
 
+    let service = serial_mcp_agent::PortService::new(app_state.clone());
     let ctx = RestContext {
         state: app_state,
         sessions: Arc::new(session_store),
+        service,
     };
 
     let app = serial_mcp_agent::rest_api::build_router(ctx);
@@ -88,9 +91,7 @@ async fn test_websocket_connection() {
     let url = start_test_server(state).await;
 
     // Connect to WebSocket
-    let (ws_stream, _) = connect_async(&url)
-        .await
-        .expect("Failed to connect");
+    let (ws_stream, _) = connect_async(&url).await.expect("Failed to connect");
 
     let (mut _write, mut read) = ws_stream.split();
 
@@ -103,8 +104,7 @@ async fn test_websocket_connection() {
 
     match msg {
         TungsteniteMessage::Text(text) => {
-            let json: serde_json::Value = serde_json::from_str(&text)
-                .expect("Invalid JSON");
+            let json: serde_json::Value = serde_json::from_str(&text).expect("Invalid JSON");
             assert_eq!(json["type"], "status");
             assert_eq!(json["state"], "Closed");
         }
@@ -117,9 +117,7 @@ async fn test_websocket_write_command() {
     let state = create_test_state_with_mock();
     let url = start_test_server(state.clone()).await;
 
-    let (ws_stream, _) = connect_async(&url)
-        .await
-        .expect("Failed to connect");
+    let (ws_stream, _) = connect_async(&url).await.expect("Failed to connect");
 
     let (mut write, mut read) = ws_stream.split();
 
@@ -146,8 +144,7 @@ async fn test_websocket_write_command() {
 
     match msg {
         TungsteniteMessage::Text(text) => {
-            let json: serde_json::Value = serde_json::from_str(&text)
-                .expect("Invalid JSON");
+            let json: serde_json::Value = serde_json::from_str(&text).expect("Invalid JSON");
             assert_eq!(json["type"], "status");
             assert_eq!(json["state"], "Open");
         }
@@ -156,7 +153,11 @@ async fn test_websocket_write_command() {
 
     // Verify data was written
     let st = state.lock().unwrap();
-    if let PortState::Open { bytes_written_total, .. } = &*st {
+    if let PortState::Open {
+        bytes_written_total,
+        ..
+    } = &*st
+    {
         assert!(*bytes_written_total > 0, "No bytes written");
     } else {
         panic!("Port should be open");
@@ -168,9 +169,7 @@ async fn test_websocket_write_to_closed_port() {
     let state = create_test_state_closed();
     let url = start_test_server(state).await;
 
-    let (ws_stream, _) = connect_async(&url)
-        .await
-        .expect("Failed to connect");
+    let (ws_stream, _) = connect_async(&url).await.expect("Failed to connect");
 
     let (mut write, mut read) = ws_stream.split();
 
@@ -197,8 +196,7 @@ async fn test_websocket_write_to_closed_port() {
 
     match msg {
         TungsteniteMessage::Text(text) => {
-            let json: serde_json::Value = serde_json::from_str(&text)
-                .expect("Invalid JSON");
+            let json: serde_json::Value = serde_json::from_str(&text).expect("Invalid JSON");
             assert_eq!(json["type"], "error");
             assert!(json["message"].as_str().unwrap().contains("not open"));
         }
@@ -211,9 +209,7 @@ async fn test_websocket_subscribe_unsubscribe() {
     let state = create_test_state_with_mock();
     let url = start_test_server(state).await;
 
-    let (ws_stream, _) = connect_async(&url)
-        .await
-        .expect("Failed to connect");
+    let (ws_stream, _) = connect_async(&url).await.expect("Failed to connect");
 
     let (mut write, mut read) = ws_stream.split();
 
@@ -247,9 +243,7 @@ async fn test_websocket_data_streaming() {
     let state = create_test_state_with_mock();
     let url = start_test_server(state).await;
 
-    let (ws_stream, _) = connect_async(&url)
-        .await
-        .expect("Failed to connect");
+    let (ws_stream, _) = connect_async(&url).await.expect("Failed to connect");
 
     let (mut write, mut read) = ws_stream.split();
 
@@ -288,9 +282,7 @@ async fn test_websocket_ping_pong() {
     let state = create_test_state_closed();
     let url = start_test_server(state).await;
 
-    let (ws_stream, _) = connect_async(&url)
-        .await
-        .expect("Failed to connect");
+    let (ws_stream, _) = connect_async(&url).await.expect("Failed to connect");
 
     let (mut write, mut read) = ws_stream.split();
 
@@ -323,9 +315,7 @@ async fn test_websocket_invalid_command() {
     let state = create_test_state_closed();
     let url = start_test_server(state).await;
 
-    let (ws_stream, _) = connect_async(&url)
-        .await
-        .expect("Failed to connect");
+    let (ws_stream, _) = connect_async(&url).await.expect("Failed to connect");
 
     let (mut write, mut read) = ws_stream.split();
 
@@ -347,8 +337,7 @@ async fn test_websocket_invalid_command() {
 
     match msg {
         TungsteniteMessage::Text(text) => {
-            let json: serde_json::Value = serde_json::from_str(&text)
-                .expect("Invalid JSON");
+            let json: serde_json::Value = serde_json::from_str(&text).expect("Invalid JSON");
             assert_eq!(json["type"], "error");
         }
         _ => panic!("Expected text message"),
@@ -366,9 +355,7 @@ async fn test_websocket_concurrent_connections() {
     for _ in 0..3 {
         let url_clone = url.clone();
         let handle = tokio::spawn(async move {
-            let (ws_stream, _) = connect_async(&url_clone)
-                .await
-                .expect("Failed to connect");
+            let (ws_stream, _) = connect_async(&url_clone).await.expect("Failed to connect");
 
             let (mut write, mut read) = ws_stream.split();
 
@@ -400,9 +387,7 @@ async fn test_websocket_graceful_disconnect() {
     let state = create_test_state_closed();
     let url = start_test_server(state).await;
 
-    let (ws_stream, _) = connect_async(&url)
-        .await
-        .expect("Failed to connect");
+    let (ws_stream, _) = connect_async(&url).await.expect("Failed to connect");
 
     let (mut write, mut _read) = ws_stream.split();
 
@@ -421,9 +406,7 @@ async fn test_websocket_status_with_metrics() {
     let state = create_test_state_with_mock();
     let url = start_test_server(state).await;
 
-    let (ws_stream, _) = connect_async(&url)
-        .await
-        .expect("Failed to connect");
+    let (ws_stream, _) = connect_async(&url).await.expect("Failed to connect");
 
     let (_write, mut read) = ws_stream.split();
 
@@ -436,8 +419,7 @@ async fn test_websocket_status_with_metrics() {
 
     match msg {
         TungsteniteMessage::Text(text) => {
-            let json: serde_json::Value = serde_json::from_str(&text)
-                .expect("Invalid JSON");
+            let json: serde_json::Value = serde_json::from_str(&text).expect("Invalid JSON");
             assert_eq!(json["type"], "status");
             assert_eq!(json["state"], "Open");
 
@@ -459,9 +441,7 @@ async fn test_websocket_terminator_stripping() {
     let state = create_test_state_with_mock();
     let url = start_test_server(state.clone()).await;
 
-    let (ws_stream, _) = connect_async(&url)
-        .await
-        .expect("Failed to connect");
+    let (ws_stream, _) = connect_async(&url).await.expect("Failed to connect");
 
     let (mut write, mut read) = ws_stream.split();
 

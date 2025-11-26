@@ -22,11 +22,15 @@ use std::{io::Write, sync::Arc, time::Duration};
 // CallToolError lives under schema_utils submodule path
 use rust_mcp_sdk::schema::mcp_2025_06_18::schema_utils::CallToolError;
 
-use crate::port::{PortConfiguration, SyncSerialPort};
+use crate::service::{OpenConfig, PortService, ReconfigureConfig, ServiceError};
 use crate::session::SessionStore;
-use crate::state::{
-    AppState, DataBitsCfg, FlowControlCfg, ParityCfg, PortConfig, PortState, StopBitsCfg,
-};
+use crate::state::{AppState, DataBitsCfg, FlowControlCfg, ParityCfg, StopBitsCfg};
+
+#[cfg(feature = "auto-negotiation")]
+use crate::state::{PortConfig, PortState};
+
+#[cfg(feature = "auto-negotiation")]
+use crate::port::{PortConfiguration, SyncSerialPort};
 
 // ------------------ Config Type Conversions ------------------
 
@@ -327,11 +331,18 @@ pub struct ListManufacturerProfilesTool {}
 
 // ------------------ Handler ------------------
 pub struct SerialServerHandler {
-    pub state: AppState,
+    pub service: Arc<PortService>,
     pub sessions: SessionStore,
+    #[cfg(feature = "auto-negotiation")]
+    pub state: AppState, // Needed for auto-negotiation direct state access
 }
 
 impl SerialServerHandler {
+    // Helper to convert ServiceError to CallToolError
+    fn map_service_error(err: ServiceError) -> CallToolError {
+        CallToolError::from_message(err.to_string())
+    }
+
     fn list_ports_impl(&self) -> Result<CallToolResult, CallToolError> {
         let ports = serialport::available_ports()
             .map_err(|e| CallToolError::from_message(e.to_string()))?;
@@ -391,193 +402,95 @@ impl SerialServerHandler {
         )
     }
     fn open_port_impl(&self, tool: OpenPortTool) -> Result<CallToolResult, CallToolError> {
-        let mut st = self
-            .state
-            .lock()
-            .map_err(|_| CallToolError::from_message("State lock poisoned"))?;
-        if let PortState::Open { .. } = *st {
-            return Err(CallToolError::from_message("Port already open"));
-        }
-        let config = PortConfiguration {
+        let config = OpenConfig {
+            port_name: tool.port_name,
             baud_rate: tool.baud_rate,
-            timeout: Duration::from_millis(tool.timeout_ms),
-            data_bits: tool.data_bits.into(),
-            parity: tool.parity.into(),
-            stop_bits: tool.stop_bits.into(),
-            flow_control: tool.flow_control.into(),
+            timeout_ms: tool.timeout_ms,
+            data_bits: tool.data_bits,
+            parity: tool.parity,
+            stop_bits: tool.stop_bits,
+            flow_control: tool.flow_control,
+            terminator: tool.terminator,
+            idle_disconnect_ms: tool.idle_disconnect_ms,
         };
-        let port = SyncSerialPort::open(&tool.port_name, config)
-            .map_err(|e| CallToolError::from_message(e.to_string()))?;
-        *st = PortState::Open {
-            port: Box::new(port),
-            config: PortConfig {
-                port_name: tool.port_name,
-                baud_rate: tool.baud_rate,
-                timeout_ms: tool.timeout_ms,
-                data_bits: tool.data_bits,
-                parity: tool.parity,
-                stop_bits: tool.stop_bits,
-                flow_control: tool.flow_control,
-                terminator: tool.terminator,
-                idle_disconnect_ms: tool.idle_disconnect_ms,
-            },
-            last_activity: std::time::Instant::now(),
-            timeout_streak: 0,
-            bytes_read_total: 0,
-            bytes_written_total: 0,
-            idle_close_count: 0,
-            open_started: std::time::Instant::now(),
-        };
+
+        self.service.open(config).map_err(Self::map_service_error)?;
+
         Ok(CallToolResult::text_content(vec![TextContent::from(
             "opened".to_string(),
         )]))
     }
     fn write_impl(&self, tool: WriteTool) -> Result<CallToolResult, CallToolError> {
-        let mut st = self
-            .state
-            .lock()
-            .map_err(|_| CallToolError::from_message("State lock poisoned"))?;
-        match &mut *st {
-            PortState::Open {
-                port,
-                config,
-                last_activity,
-                bytes_written_total,
-                ..
-            } => {
-                let mut data = tool.data;
-                if let Some(term) = &config.terminator {
-                    if !data.ends_with(term) {
-                        data.push_str(term);
-                    }
-                }
-                let bytes = port
-                    .write_bytes(data.as_bytes())
-                    .map_err(|e| CallToolError::from_message(e.to_string()))?;
-                *bytes_written_total += bytes as u64;
-                *last_activity = std::time::Instant::now();
-                let mut structured = serde_json::Map::new();
-                structured.insert(
-                    "bytes_written".into(),
-                    serde_json::Value::Number(bytes.into()),
-                );
-                structured.insert(
-                    "bytes_written_total".into(),
-                    serde_json::Value::Number((*bytes_written_total).into()),
-                );
-                Ok(CallToolResult::text_content(vec![TextContent::from(format!(
-                    "wrote {} bytes",
-                    bytes
-                ))])
-                .with_structured_content(structured))
-            }
-            _ => Err(CallToolError::from_message("Port not open")),
-        }
+        let result = self
+            .service
+            .write(&tool.data)
+            .map_err(Self::map_service_error)?;
+
+        let mut structured = serde_json::Map::new();
+        structured.insert(
+            "bytes_written".into(),
+            serde_json::Value::Number(result.bytes_written.into()),
+        );
+        structured.insert(
+            "bytes_written_total".into(),
+            serde_json::Value::Number(result.bytes_written_total.into()),
+        );
+
+        Ok(CallToolResult::text_content(vec![TextContent::from(format!(
+            "wrote {} bytes",
+            result.bytes_written
+        ))])
+        .with_structured_content(structured))
     }
     fn read_impl(&self) -> Result<CallToolResult, CallToolError> {
-        let mut st = self
-            .state
-            .lock()
-            .map_err(|_| CallToolError::from_message("State lock poisoned"))?;
-        match &mut *st {
-            PortState::Open {
-                port,
-                config,
-                last_activity,
-                timeout_streak,
-                bytes_read_total,
-                idle_close_count,
-                ..
-            } => {
-                let mut buffer = vec![0u8; 1024];
-                let bytes_read = match port.read_bytes(buffer.as_mut_slice()) {
-                    Ok(n) => n,
-                    Err(e) if matches!(e, crate::port::PortError::Io(ref io_err) if io_err.kind() == std::io::ErrorKind::TimedOut) => {
-                        0
-                    }
-                    Err(e) => return Err(CallToolError::from_message(e.to_string())),
-                };
-                let data_raw = String::from_utf8_lossy(&buffer[..bytes_read]).to_string();
-                if bytes_read > 0 {
-                    *last_activity = std::time::Instant::now();
-                    *timeout_streak = 0;
-                    *bytes_read_total += bytes_read as u64;
-                } else {
-                    *timeout_streak += 1;
-                }
-                // Check idle auto-close without mut-borrowing st inside the pattern
-                let should_close_idle = bytes_read == 0
-                    && config
-                        .idle_disconnect_ms
-                        .map(|ms| last_activity.elapsed() >= Duration::from_millis(ms))
-                        .unwrap_or(false);
-                if should_close_idle {
-                    if let Some(_ms) = config.idle_disconnect_ms {
-                        *idle_close_count += 1;
-                    }
-                    let count = *idle_close_count;
-                    let ms = config.idle_disconnect_ms.unwrap_or(0);
-                    // Drop match before mutating the overall enum to avoid double borrow
-                    let mut structured = serde_json::Map::new();
-                    structured.insert("event".into(), json!("auto_close"));
-                    structured.insert("reason".into(), json!("idle_timeout"));
-                    structured.insert("idle_ms".into(), json!(ms));
-                    structured.insert("idle_close_count".into(), json!(count));
-                    // Replace outer state now (safe; we still hold the lock but not the inner borrow)
-                    *st = PortState::Closed;
-                    return Ok(CallToolResult::text_content(vec![TextContent::from(
-                        "closed (idle timeout)".to_string(),
-                    )])
-                    .with_structured_content(structured));
-                }
-                let data = if let Some(term) = &config.terminator {
-                    data_raw.trim_end_matches(term).to_string()
-                } else {
-                    data_raw
-                };
-                let mut structured = serde_json::Map::new();
-                structured.insert("data".into(), serde_json::Value::String(data.clone()));
-                structured.insert(
-                    "bytes_read".into(),
-                    serde_json::Value::Number(bytes_read.into()),
-                );
-                structured.insert(
-                    "bytes_read_total".into(),
-                    serde_json::Value::Number((*bytes_read_total).into()),
-                );
-                Ok(CallToolResult::text_content(vec![TextContent::from(format!(
-                    "read {} bytes",
-                    bytes_read
-                ))])
-                .with_structured_content(structured))
-            }
-            _ => Err(CallToolError::from_message("Port not open")),
+        let result = self.service.read().map_err(Self::map_service_error)?;
+
+        // Handle auto-close case
+        if let Some(auto_close) = result.auto_closed {
+            let mut structured = serde_json::Map::new();
+            structured.insert("event".into(), json!("auto_close"));
+            structured.insert("reason".into(), json!(auto_close.reason));
+            structured.insert(
+                "idle_close_count".into(),
+                json!(auto_close.idle_close_count),
+            );
+            return Ok(CallToolResult::text_content(vec![TextContent::from(
+                "closed (idle timeout)".to_string(),
+            )])
+            .with_structured_content(structured));
         }
+
+        // Normal read response
+        let mut structured = serde_json::Map::new();
+        structured.insert(
+            "data".into(),
+            serde_json::Value::String(result.data.clone()),
+        );
+        structured.insert(
+            "bytes_read".into(),
+            serde_json::Value::Number(result.bytes_read.into()),
+        );
+        structured.insert(
+            "bytes_read_total".into(),
+            serde_json::Value::Number(result.bytes_read_total.into()),
+        );
+
+        Ok(CallToolResult::text_content(vec![TextContent::from(format!(
+            "read {} bytes",
+            result.bytes_read
+        ))])
+        .with_structured_content(structured))
     }
     fn close_impl(&self) -> Result<CallToolResult, CallToolError> {
-        let mut st = self
-            .state
-            .lock()
-            .map_err(|_| CallToolError::from_message("State lock poisoned"))?;
-        match &*st {
-            PortState::Closed => Ok(CallToolResult::text_content(vec![TextContent::from(
-                "already closed".to_string(),
-            )])),
-            _ => {
-                *st = PortState::Closed;
-                Ok(CallToolResult::text_content(vec![TextContent::from(
-                    "closed".to_string(),
-                )]))
-            }
-        }
+        let result = self.service.close().map_err(Self::map_service_error)?;
+        Ok(CallToolResult::text_content(vec![TextContent::from(
+            result.message,
+        )]))
     }
     fn status_impl(&self) -> Result<CallToolResult, CallToolError> {
-        let st = self
-            .state
-            .lock()
-            .map_err(|_| CallToolError::from_message("State lock poisoned"))?;
-        let val =
-            serde_json::to_value(&*st).map_err(|e| CallToolError::from_message(e.to_string()))?;
+        let status = self.service.status().map_err(Self::map_service_error)?;
+        let val = serde_json::to_value(&status)
+            .map_err(|e| CallToolError::from_message(e.to_string()))?;
         let mut structured = serde_json::Map::new();
         structured.insert("status".into(), val);
         Ok(
@@ -586,38 +499,26 @@ impl SerialServerHandler {
         )
     }
     fn metrics_impl(&self) -> Result<CallToolResult, CallToolError> {
-        let st = self
-            .state
-            .lock()
-            .map_err(|_| CallToolError::from_message("State lock poisoned"))?;
+        let metrics = self.service.metrics().map_err(Self::map_service_error)?;
         let mut structured = serde_json::Map::new();
-        match &*st {
-            PortState::Closed => {
-                structured.insert("state".into(), json!("Closed"));
-            }
-            PortState::Open {
-                bytes_read_total,
-                bytes_written_total,
-                idle_close_count,
-                open_started,
-                last_activity,
-                timeout_streak,
-                ..
-            } => {
-                structured.insert("state".into(), json!("Open"));
-                structured.insert("bytes_read_total".into(), json!(bytes_read_total));
-                structured.insert("bytes_written_total".into(), json!(bytes_written_total));
-                structured.insert("idle_close_count".into(), json!(idle_close_count));
-                structured.insert(
-                    "open_duration_ms".into(),
-                    json!(open_started.elapsed().as_millis() as u64),
-                );
-                structured.insert(
-                    "last_activity_ms".into(),
-                    json!(last_activity.elapsed().as_millis() as u64),
-                );
-                structured.insert("timeout_streak".into(), json!(timeout_streak));
-            }
+        structured.insert("state".into(), json!(metrics.state));
+        if let Some(val) = metrics.bytes_read_total {
+            structured.insert("bytes_read_total".into(), json!(val));
+        }
+        if let Some(val) = metrics.bytes_written_total {
+            structured.insert("bytes_written_total".into(), json!(val));
+        }
+        if let Some(val) = metrics.idle_close_count {
+            structured.insert("idle_close_count".into(), json!(val));
+        }
+        if let Some(val) = metrics.open_duration_ms {
+            structured.insert("open_duration_ms".into(), json!(val));
+        }
+        if let Some(val) = metrics.last_activity_ms {
+            structured.insert("last_activity_ms".into(), json!(val));
+        }
+        if let Some(val) = metrics.timeout_streak {
+            structured.insert("timeout_streak".into(), json!(val));
         }
         Ok(
             CallToolResult::text_content(vec![TextContent::from("metrics".to_string())])
@@ -628,52 +529,26 @@ impl SerialServerHandler {
         &self,
         tool: ReconfigurePortTool,
     ) -> Result<CallToolResult, CallToolError> {
-        let mut st = self
-            .state
-            .lock()
-            .map_err(|_| CallToolError::from_message("State lock poisoned"))?;
-        let target = match (&tool.port_name, &*st) {
-            (Some(p), _) => p.clone(),
-            (None, PortState::Open { config, .. }) => config.port_name.clone(),
-            (None, PortState::Closed) => {
-                return Err(CallToolError::from_message(
-                    "No port open and no port_name provided",
-                ))
-            }
-        };
-        let config = PortConfiguration {
+        let config = ReconfigureConfig {
+            port_name: tool.port_name.clone(),
             baud_rate: tool.baud_rate,
-            timeout: Duration::from_millis(tool.timeout_ms),
-            data_bits: tool.data_bits.into(),
-            parity: tool.parity.into(),
-            stop_bits: tool.stop_bits.into(),
-            flow_control: tool.flow_control.into(),
+            timeout_ms: tool.timeout_ms,
+            data_bits: tool.data_bits,
+            parity: tool.parity,
+            stop_bits: tool.stop_bits,
+            flow_control: tool.flow_control,
+            terminator: tool.terminator.clone(),
+            idle_disconnect_ms: tool.idle_disconnect_ms,
         };
-        let port = SyncSerialPort::open(&target, config)
-            .map_err(|e| CallToolError::from_message(format!("reconfigure failed: {e}")))?;
-        *st = PortState::Open {
-            port: Box::new(port),
-            config: PortConfig {
-                port_name: target.clone(),
-                baud_rate: tool.baud_rate,
-                timeout_ms: tool.timeout_ms,
-                data_bits: tool.data_bits,
-                parity: tool.parity,
-                stop_bits: tool.stop_bits,
-                flow_control: tool.flow_control,
-                terminator: tool.terminator.clone(),
-                idle_disconnect_ms: tool.idle_disconnect_ms,
-            },
-            last_activity: std::time::Instant::now(),
-            timeout_streak: 0,
-            bytes_read_total: 0,
-            bytes_written_total: 0,
-            idle_close_count: 0,
-            open_started: std::time::Instant::now(),
-        };
+
+        let result = self
+            .service
+            .reconfigure(config)
+            .map_err(Self::map_service_error)?;
+
         let mut structured = serde_json::Map::new();
-        structured.insert("port_name".into(), json!(target));
-        structured.insert("baud_rate".into(), json!(tool.baud_rate));
+        structured.insert("port_name".into(), json!(result.port_name));
+        structured.insert("baud_rate".into(), json!(result.baud_rate));
         structured.insert(
             "data_bits".into(),
             json!(format!("{:?}", tool.data_bits).to_lowercase()),
@@ -886,8 +761,10 @@ impl SerialServerHandler {
     ) -> Result<CallToolResult, CallToolError> {
         use crate::negotiation::{AutoNegotiator, NegotiationHints};
 
-        let mut hints = NegotiationHints::default();
-        hints.timeout_ms = tool.timeout_ms;
+        let mut hints = NegotiationHints {
+            timeout_ms: tool.timeout_ms,
+            ..Default::default()
+        };
 
         // Parse VID/PID from hex strings if provided
         if let Some(vid_str) = &tool.vid {
@@ -958,20 +835,16 @@ impl SerialServerHandler {
     ) -> Result<CallToolResult, CallToolError> {
         use crate::negotiation::{AutoNegotiator, NegotiationHints};
 
-        // Check if port is already open
-        {
-            let st = self
-                .state
-                .lock()
-                .map_err(|_| CallToolError::from_message("State lock poisoned"))?;
-            if let PortState::Open { .. } = *st {
-                return Err(CallToolError::from_message("Port already open"));
-            }
+        // Check if port is already open using service
+        if self.service.is_open() {
+            return Err(CallToolError::from_message("Port already open"));
         }
 
         // Build hints for auto-detection
-        let mut hints = NegotiationHints::default();
-        hints.timeout_ms = tool.timeout_ms;
+        let mut hints = NegotiationHints {
+            timeout_ms: tool.timeout_ms,
+            ..Default::default()
+        };
 
         if let Some(vid_str) = &tool.vid {
             let vid = u16::from_str_radix(vid_str.trim_start_matches("0x"), 16)
@@ -1646,9 +1519,12 @@ pub async fn start_mcp_server_stdio(
         let _ = std::io::stdout().flush();
     }
     // Use the provided session store (caller is responsible for lifecycle)
+    let service = Arc::new(PortService::new(state.clone()));
     let handler = SerialServerHandler {
-        state,
+        service,
         sessions: session_store,
+        #[cfg(feature = "auto-negotiation")]
+        state,
     };
     let server = server_runtime::create_server(details, transport, handler);
     server.start().await

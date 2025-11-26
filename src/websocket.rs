@@ -19,10 +19,7 @@ use tokio::sync::broadcast;
 use tokio_stream::wrappers::{errors::BroadcastStreamRecvError, BroadcastStream};
 use tracing::{debug, error, info, warn};
 
-use crate::{
-    rest_api::RestContext,
-    state::PortState,
-};
+use crate::{rest_api::RestContext, state::PortState};
 
 /// Maximum number of messages buffered per WebSocket connection.
 /// Prevents slow clients from consuming unlimited memory.
@@ -36,10 +33,7 @@ const SERIAL_READ_INTERVAL_MS: u64 = 50;
 #[serde(tag = "type", rename_all = "snake_case")]
 enum WsMessage {
     /// Data received from serial port
-    Data {
-        data: String,
-        timestamp: String,
-    },
+    Data { data: String, timestamp: String },
     /// Port status update
     Status {
         state: PortStatusState,
@@ -47,9 +41,7 @@ enum WsMessage {
         metrics: Option<PortMetrics>,
     },
     /// Error notification
-    Error {
-        message: String,
-    },
+    Error { message: String },
 }
 
 /// Incoming WebSocket commands from clients.
@@ -243,7 +235,10 @@ async fn handle_write_command(
 ) -> Result<(), String> {
     // Perform the write and collect the response message
     let response = {
-        let mut st = ctx.state.lock().map_err(|e| format!("State lock error: {}", e))?;
+        let mut st = ctx
+            .state
+            .lock()
+            .map_err(|e| format!("State lock error: {}", e))?;
 
         match &mut *st {
             PortState::Open {
@@ -408,9 +403,7 @@ async fn serial_reader_task(ctx: RestContext, broadcast: BroadcastState) {
                     *st = PortState::Closed;
                 } else {
                     // Other error
-                    let msg = WsMessage::Error {
-                        message: error_msg,
-                    };
+                    let msg = WsMessage::Error { message: error_msg };
                     broadcast.broadcast(msg);
                 }
             }
@@ -427,7 +420,10 @@ async fn send_message(
     msg: &WsMessage,
 ) -> Result<(), String> {
     let json = serde_json::to_string(msg).map_err(|e| e.to_string())?;
-    sender.send(Message::Text(json.into())).await.map_err(|e| e.to_string())?;
+    sender
+        .send(Message::Text(json.into()))
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -448,7 +444,10 @@ async fn send_status(
     ctx: &RestContext,
 ) -> Result<(), String> {
     let msg = {
-        let st = ctx.state.lock().map_err(|e| format!("State lock error: {}", e))?;
+        let st = ctx
+            .state
+            .lock()
+            .map_err(|e| format!("State lock error: {}", e))?;
 
         match &*st {
             PortState::Closed => WsMessage::Status {

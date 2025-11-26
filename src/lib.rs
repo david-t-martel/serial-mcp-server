@@ -9,12 +9,14 @@
 //! - `error`: Unified error handling
 //! - `session`: Session tracking and management
 //! - `port`: Port abstraction layer for serial communication
+//! - `service`: Business logic layer for port operations
 //! - `mcp`: MCP server implementation (when `mcp` feature is enabled)
 //! - `rest_api`: REST API handlers (when `rest-api` feature is enabled)
 //! - `stdio`: Legacy stdio interface
 
 pub mod error;
 pub mod port;
+pub mod service;
 pub mod session;
 pub mod state;
 
@@ -39,6 +41,10 @@ pub use error::AppError;
 pub use port::{
     DataBits, FlowControl, MockSerialPort, Parity, PortConfiguration, PortError, SerialPortAdapter,
     StopBits, SyncSerialPort,
+};
+pub use service::{
+    AutoCloseInfo, CloseResult, MetricsResult, OpenConfig, OpenResult, PortMetrics, PortService,
+    ReadResult, ReconfigureConfig, ServiceError, ServiceResult, StatusResult, WriteResult,
 };
 pub use state::{
     AppState, DataBitsCfg, FlowControlCfg, ParityCfg, PortConfig, PortState, StopBitsCfg,

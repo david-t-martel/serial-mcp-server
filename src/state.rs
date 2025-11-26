@@ -119,4 +119,3 @@ pub enum PortState {
         open_started: Instant,
     },
 }
-

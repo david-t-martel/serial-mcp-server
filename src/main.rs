@@ -15,7 +15,6 @@ use serial_mcp_agent::mcp;
 #[cfg(feature = "rest-api")]
 use serial_mcp_agent::rest_api;
 
-
 // Command-line arguments
 #[derive(Parser, Debug)]
 #[command(
@@ -66,9 +65,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         if args.server {
             // --- HTTP Server Mode ---
+            let service = serial_mcp_agent::PortService::new(app_state.clone());
             let rest_ctx = rest_api::RestContext {
                 state: app_state.clone(),
                 sessions: std::sync::Arc::new(session_store.clone()),
+                service,
             };
             let app = rest_api::build_router(rest_ctx);
 
@@ -123,6 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(feature = "rest-api")]
 // Placeholder handlers kept for compatibility; currently non-functional beyond health.
 // Future: Reintroduce REST by bridging to MCP tool calls or remove feature entirely.
+#[allow(dead_code)]
 async fn http_list_ports() -> AppResult<axum::Json<serde_json::Value>> {
     Err(serial_mcp_agent::AppError::InvalidPayload(
         "REST API deprecated".into(),

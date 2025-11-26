@@ -13,16 +13,21 @@ use serde_json::{json, Value};
 use std::{sync::Arc, time::Duration};
 
 use crate::{
-    error::AppError,
-    port::{DataBits, FlowControl, Parity, PortConfiguration, StopBits, SyncSerialPort},
     session::SessionStore,
-    state::{AppState, DataBitsCfg, FlowControlCfg, ParityCfg, PortConfig, PortState, StopBitsCfg},
+    state::{AppState, DataBitsCfg, FlowControlCfg, ParityCfg, StopBitsCfg},
 };
+
+#[cfg(feature = "auto-negotiation")]
+use crate::state::{PortConfig, PortState};
+
+#[cfg(feature = "auto-negotiation")]
+use crate::port::{PortConfiguration, SyncSerialPort};
 
 #[derive(Clone)]
 pub struct RestContext {
     pub state: AppState,
     pub sessions: Arc<SessionStore>,
+    pub service: crate::service::PortService,
 }
 
 // ---------- Serial Port DTOs ----------
@@ -259,66 +264,29 @@ async fn open_port(
     AxumState(ctx): AxumState<RestContext>,
     Json(req): Json<OpenRequest>,
 ) -> Json<Value> {
-    let mut st = ctx
-        .state
-        .lock()
-        .map_err(|_| AppError::InvalidPayload("state lock".into()))
-        .unwrap();
-    if matches!(&*st, PortState::Open { .. }) {
-        return Json(err_json("PortAlreadyOpen", "Port already open"));
-    }
+    use crate::service::OpenConfig;
 
-    // Convert REST API config enums to port module enums
-    let config = PortConfiguration {
+    let config = OpenConfig {
+        port_name: req.port_name,
         baud_rate: req.baud_rate,
-        data_bits: match req.data_bits {
-            DataBitsCfg::Five => DataBits::Five,
-            DataBitsCfg::Six => DataBits::Six,
-            DataBitsCfg::Seven => DataBits::Seven,
-            DataBitsCfg::Eight => DataBits::Eight,
-        },
-        parity: match req.parity {
-            ParityCfg::None => Parity::None,
-            ParityCfg::Odd => Parity::Odd,
-            ParityCfg::Even => Parity::Even,
-        },
-        stop_bits: match req.stop_bits {
-            StopBitsCfg::One => StopBits::One,
-            StopBitsCfg::Two => StopBits::Two,
-        },
-        flow_control: match req.flow_control {
-            FlowControlCfg::None => FlowControl::None,
-            FlowControlCfg::Hardware => FlowControl::Hardware,
-            FlowControlCfg::Software => FlowControl::Software,
-        },
-        timeout: Duration::from_millis(req.timeout_ms),
+        timeout_ms: req.timeout_ms,
+        data_bits: req.data_bits,
+        parity: req.parity,
+        stop_bits: req.stop_bits,
+        flow_control: req.flow_control,
+        terminator: req.terminator,
+        idle_disconnect_ms: req.idle_disconnect_ms,
     };
 
-    match SyncSerialPort::open(&req.port_name, config) {
-        Ok(port) => {
-            *st = PortState::Open {
-                port: Box::new(port),
-                config: PortConfig {
-                    port_name: req.port_name.clone(),
-                    baud_rate: req.baud_rate,
-                    timeout_ms: req.timeout_ms,
-                    data_bits: req.data_bits,
-                    parity: req.parity,
-                    stop_bits: req.stop_bits,
-                    flow_control: req.flow_control,
-                    terminator: req.terminator,
-                    idle_disconnect_ms: req.idle_disconnect_ms,
-                },
-                last_activity: std::time::Instant::now(),
-                timeout_streak: 0,
-                bytes_read_total: 0,
-                bytes_written_total: 0,
-                idle_close_count: 0,
-                open_started: std::time::Instant::now(),
+    match ctx.service.open(config) {
+        Ok(_result) => Json(json!({"status":"ok","message":"opened"})),
+        Err(e) => {
+            let err_type = match e {
+                crate::service::ServiceError::PortAlreadyOpen => "PortAlreadyOpen",
+                _ => "OpenError",
             };
-            Json(json!({"status":"ok","message":"opened"}))
+            Json(err_json(err_type, &e.to_string()))
         }
-        Err(e) => Json(err_json("OpenError", &e.to_string())),
     }
 }
 
@@ -326,153 +294,93 @@ async fn write_port(
     AxumState(ctx): AxumState<RestContext>,
     Json(req): Json<WriteRequest>,
 ) -> Json<Value> {
-    let mut st = ctx.state.lock().unwrap();
-    match &mut *st {
-        PortState::Open {
-            port,
-            config,
-            last_activity,
-            bytes_written_total,
-            ..
-        } => {
-            let mut data = req.data;
-            if let Some(term) = &config.terminator {
-                if !data.ends_with(term) {
-                    data.push_str(term);
-                }
-            }
-            match port.write_bytes(data.as_bytes()) {
-                Ok(bytes) => {
-                    *bytes_written_total += bytes as u64;
-                    *last_activity = std::time::Instant::now();
-                    Json(
-                        json!({"status":"ok","bytes_written":bytes,"bytes_written_total":*bytes_written_total}),
-                    )
-                }
-                Err(e) => Json(err_json("WriteError", &e.to_string())),
-            }
+    match ctx.service.write(&req.data) {
+        Ok(result) => Json(json!({
+            "status":"ok",
+            "bytes_written": result.bytes_written,
+            "bytes_written_total": result.bytes_written_total
+        })),
+        Err(e) => {
+            let err_type = match e {
+                crate::service::ServiceError::PortNotOpen => "PortNotOpen",
+                _ => "WriteError",
+            };
+            Json(err_json(err_type, &e.to_string()))
         }
-        _ => Json(err_json("PortNotOpen", "Port not open")),
     }
 }
 
 async fn read_port(AxumState(ctx): AxumState<RestContext>) -> Json<Value> {
-    let mut st = ctx.state.lock().unwrap();
-
-    // Extract data while borrowing, then decide action
-    let result = match &mut *st {
-        PortState::Open {
-            port,
-            config,
-            last_activity,
-            timeout_streak,
-            bytes_read_total,
-            idle_close_count,
-            ..
-        } => {
-            let mut buffer = vec![0u8; 1024];
-            let bytes_read = match port.read_bytes(buffer.as_mut_slice()) {
-                Ok(n) => n,
-                Err(e) => {
-                    // Check if it's a timeout error by extracting the io::Error
-                    if let crate::port::PortError::Io(ref io_err) = e {
-                        if io_err.kind() == std::io::ErrorKind::TimedOut {
-                            0
-                        } else {
-                            return Json(err_json("ReadError", &e.to_string()));
-                        }
-                    } else {
-                        return Json(err_json("ReadError", &e.to_string()));
-                    }
-                }
-            };
-            let raw = String::from_utf8_lossy(&buffer[..bytes_read]).to_string();
-
-            if bytes_read > 0 {
-                *last_activity = std::time::Instant::now();
-                *timeout_streak = 0;
-                *bytes_read_total += bytes_read as u64;
+    match ctx.service.read() {
+        Ok(result) => {
+            if let Some(auto_close) = result.auto_closed {
+                Json(json!({
+                    "status":"ok",
+                    "event":"auto_close",
+                    "reason": auto_close.reason,
+                    "idle_close_count": auto_close.idle_close_count
+                }))
             } else {
-                *timeout_streak += 1;
-            }
-
-            let idle_expired = bytes_read == 0
-                && config
-                    .idle_disconnect_ms
-                    .map(|ms| last_activity.elapsed() >= Duration::from_millis(ms))
-                    .unwrap_or(false);
-
-            if idle_expired {
-                *idle_close_count += 1;
-                let count = *idle_close_count;
-                // Return indicator to close port after match
-                Err(count)
-            } else {
-                let data = if let Some(term) = &config.terminator {
-                    raw.trim_end_matches(term).to_string()
-                } else {
-                    raw
-                };
-                let total = *bytes_read_total;
-                Ok(
-                    json!({"status":"ok","data":data,"bytes_read":bytes_read,"bytes_read_total":total}),
-                )
+                Json(json!({
+                    "status":"ok",
+                    "data": result.data,
+                    "bytes_read": result.bytes_read,
+                    "bytes_read_total": result.bytes_read_total
+                }))
             }
         }
-        _ => return Json(err_json("PortNotOpen", "Port not open")),
-    };
-
-    // Handle result outside the borrow scope
-    match result {
-        Ok(json_val) => Json(json_val),
-        Err(idle_count) => {
-            *st = PortState::Closed;
-            Json(
-                json!({"status":"ok","event":"auto_close","reason":"idle_timeout","idle_close_count":idle_count}),
-            )
+        Err(e) => {
+            let err_type = match e {
+                crate::service::ServiceError::PortNotOpen => "PortNotOpen",
+                _ => "ReadError",
+            };
+            Json(err_json(err_type, &e.to_string()))
         }
     }
 }
 
 async fn close_port(AxumState(ctx): AxumState<RestContext>) -> Json<Value> {
-    let mut st = ctx.state.lock().unwrap();
-    match &*st {
-        PortState::Closed => Json(json!({"status":"ok","message":"already closed"})),
-        _ => {
-            *st = PortState::Closed;
-            Json(json!({"status":"ok","message":"closed"}))
-        }
+    match ctx.service.close() {
+        Ok(result) => Json(json!({"status":"ok","message": result.message})),
+        Err(e) => Json(err_json("CloseError", &e.to_string())),
     }
 }
 
 async fn status_port(AxumState(ctx): AxumState<RestContext>) -> Json<Value> {
-    let st = ctx.state.lock().unwrap();
-    let status = serde_json::to_value(&*st).unwrap_or(json!({"status":"unknown"}));
-    Json(json!({"status":"ok","port":status}))
+    match ctx.service.status() {
+        Ok(status) => {
+            let port_value = serde_json::to_value(&status).unwrap_or(json!({"status":"unknown"}));
+            Json(json!({"status":"ok","port": port_value}))
+        }
+        Err(e) => Json(err_json("StatusError", &e.to_string())),
+    }
 }
 
 async fn metrics_port(AxumState(ctx): AxumState<RestContext>) -> Json<Value> {
-    let st = ctx.state.lock().unwrap();
-    match &*st {
-        PortState::Closed => Json(json!({"status":"ok","state":"Closed"})),
-        PortState::Open {
-            bytes_read_total,
-            bytes_written_total,
-            idle_close_count,
-            open_started,
-            last_activity,
-            timeout_streak,
-            ..
-        } => Json(json!({
-            "status":"ok",
-            "state":"Open",
-            "bytes_read_total":bytes_read_total,
-            "bytes_written_total":bytes_written_total,
-            "idle_close_count":idle_close_count,
-            "open_duration_ms": open_started.elapsed().as_millis() as u64,
-            "last_activity_ms": last_activity.elapsed().as_millis() as u64,
-            "timeout_streak": timeout_streak,
-        })),
+    match ctx.service.metrics() {
+        Ok(metrics) => {
+            let mut response = json!({"status":"ok","state": metrics.state});
+            if let Some(bytes_read) = metrics.bytes_read_total {
+                response["bytes_read_total"] = json!(bytes_read);
+            }
+            if let Some(bytes_written) = metrics.bytes_written_total {
+                response["bytes_written_total"] = json!(bytes_written);
+            }
+            if let Some(idle_count) = metrics.idle_close_count {
+                response["idle_close_count"] = json!(idle_count);
+            }
+            if let Some(duration) = metrics.open_duration_ms {
+                response["open_duration_ms"] = json!(duration);
+            }
+            if let Some(activity) = metrics.last_activity_ms {
+                response["last_activity_ms"] = json!(activity);
+            }
+            if let Some(streak) = metrics.timeout_streak {
+                response["timeout_streak"] = json!(streak);
+            }
+            Json(response)
+        }
+        Err(e) => Json(err_json("MetricsError", &e.to_string())),
     }
 }
 
@@ -582,76 +490,34 @@ async fn reconfigure_port(
     AxumState(ctx): AxumState<RestContext>,
     Json(req): Json<ReconfigureRequest>,
 ) -> Json<Value> {
-    let mut st = ctx.state.lock().unwrap();
+    use crate::service::ReconfigureConfig;
 
-    // Determine target port name
-    let target = match (&req.port_name, &*st) {
-        (Some(p), _) => p.clone(),
-        (None, PortState::Open { config, .. }) => config.port_name.clone(),
-        (None, PortState::Closed) => {
-            return Json(err_json(
-                "InvalidPayload",
-                "No port open and no port_name provided",
-            ))
-        }
-    };
-
-    // Build port configuration
-    let config = PortConfiguration {
+    let config = ReconfigureConfig {
+        port_name: req.port_name,
         baud_rate: req.baud_rate,
-        data_bits: match req.data_bits {
-            DataBitsCfg::Five => DataBits::Five,
-            DataBitsCfg::Six => DataBits::Six,
-            DataBitsCfg::Seven => DataBits::Seven,
-            DataBitsCfg::Eight => DataBits::Eight,
-        },
-        parity: match req.parity {
-            ParityCfg::None => Parity::None,
-            ParityCfg::Odd => Parity::Odd,
-            ParityCfg::Even => Parity::Even,
-        },
-        stop_bits: match req.stop_bits {
-            StopBitsCfg::One => StopBits::One,
-            StopBitsCfg::Two => StopBits::Two,
-        },
-        flow_control: match req.flow_control {
-            FlowControlCfg::None => FlowControl::None,
-            FlowControlCfg::Hardware => FlowControl::Hardware,
-            FlowControlCfg::Software => FlowControl::Software,
-        },
-        timeout: Duration::from_millis(req.timeout_ms),
+        timeout_ms: req.timeout_ms,
+        data_bits: req.data_bits,
+        parity: req.parity,
+        stop_bits: req.stop_bits,
+        flow_control: req.flow_control,
+        terminator: req.terminator,
+        idle_disconnect_ms: req.idle_disconnect_ms,
     };
 
-    match SyncSerialPort::open(&target, config) {
-        Ok(port) => {
-            *st = PortState::Open {
-                port: Box::new(port),
-                config: PortConfig {
-                    port_name: target.clone(),
-                    baud_rate: req.baud_rate,
-                    timeout_ms: req.timeout_ms,
-                    data_bits: req.data_bits,
-                    parity: req.parity,
-                    stop_bits: req.stop_bits,
-                    flow_control: req.flow_control,
-                    terminator: req.terminator,
-                    idle_disconnect_ms: req.idle_disconnect_ms,
-                },
-                last_activity: std::time::Instant::now(),
-                timeout_streak: 0,
-                bytes_read_total: 0,
-                bytes_written_total: 0,
-                idle_close_count: 0,
-                open_started: std::time::Instant::now(),
+    match ctx.service.reconfigure(config) {
+        Ok(result) => Json(json!({
+            "status": "ok",
+            "message": result.message,
+            "port_name": result.port_name,
+            "baud_rate": result.baud_rate
+        })),
+        Err(e) => {
+            let err_type = match e {
+                crate::service::ServiceError::NoPortSpecified => "InvalidPayload",
+                _ => "ReconfigureError",
             };
-            Json(json!({
-                "status": "ok",
-                "message": "reconfigured",
-                "port_name": target,
-                "baud_rate": req.baud_rate
-            }))
+            Json(err_json(err_type, &e.to_string()))
         }
-        Err(e) => Json(err_json("ReconfigureError", &e.to_string())),
     }
 }
 
@@ -663,8 +529,10 @@ async fn detect_port(
 ) -> Json<Value> {
     use crate::negotiation::{AutoNegotiator, NegotiationHints};
 
-    let mut hints = NegotiationHints::default();
-    hints.timeout_ms = req.timeout_ms;
+    let mut hints = NegotiationHints {
+        timeout_ms: req.timeout_ms,
+        ..Default::default()
+    };
 
     // Parse VID/PID from hex strings if provided
     if let Some(vid_str) = &req.vid {
@@ -726,8 +594,10 @@ async fn open_port_auto(
     }
 
     // Build hints for auto-detection
-    let mut hints = NegotiationHints::default();
-    hints.timeout_ms = req.timeout_ms;
+    let mut hints = NegotiationHints {
+        timeout_ms: req.timeout_ms,
+        ..Default::default()
+    };
 
     if let Some(vid_str) = &req.vid {
         match u16::from_str_radix(vid_str.trim_start_matches("0x"), 16) {
@@ -813,9 +683,7 @@ async fn open_port_auto(
 }
 
 #[cfg(feature = "auto-negotiation")]
-async fn list_manufacturer_profiles(
-    AxumState(_ctx): AxumState<RestContext>,
-) -> Json<Value> {
+async fn list_manufacturer_profiles(AxumState(_ctx): AxumState<RestContext>) -> Json<Value> {
     use crate::negotiation::AutoNegotiator;
 
     let profiles = AutoNegotiator::all_manufacturer_profiles();

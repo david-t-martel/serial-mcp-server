@@ -20,6 +20,9 @@
 //! - **Loopback tests**: Port with TX and RX connected together
 //! - **Manufacturer tests**: Port with known VID (e.g., FTDI, Arduino)
 
+#![allow(clippy::field_reassign_with_default)]
+#![allow(clippy::assertions_on_constants)]
+
 use serial_mcp_agent::port::{PortConfiguration, SerialPortAdapter, SyncSerialPort};
 use serialport::available_ports;
 use std::env;

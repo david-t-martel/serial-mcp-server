@@ -12,7 +12,6 @@
 //! - Error type conversions (From trait)
 //! - HTTP status code mappings (when rest-api feature enabled)
 
-
 // Import the modules we're testing
 use serial_mcp_agent::error::AppError;
 use serial_mcp_agent::state::{
@@ -754,8 +753,7 @@ mod edge_case_tests {
         // Demonstrate that multiple error types can be converted in sequence
         fn complex_operation() -> Result<(), AppError> {
             // Simulate various error scenarios
-            let _io_check: std::io::Result<()> =
-                Err(std::io::Error::other("test"));
+            let _io_check: std::io::Result<()> = Err(std::io::Error::other("test"));
 
             // This would convert the error
             // _io_check?;

@@ -92,9 +92,7 @@ impl TokioSerialPort {
         let inner = tokio_serial::SerialStream::open(&builder).map_err(|e| match e.kind {
             tokio_serial::ErrorKind::NoDevice => PortError::not_found(port_name),
             tokio_serial::ErrorKind::InvalidInput => PortError::config(e.to_string()),
-            _ => PortError::Io(std::io::Error::other(
-                e.to_string(),
-            )),
+            _ => PortError::Io(std::io::Error::other(e.to_string())),
         })?;
 
         Ok(Self {

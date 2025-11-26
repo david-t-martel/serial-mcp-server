@@ -27,7 +27,10 @@
       "Bash(bash scripts/verify-hooks.sh:*)",
       "Bash(make help:*)",
       "Bash(tree:*)",
-      "Bash(cargo fmt:*)"
+      "Bash(cargo fmt:*)",
+      "Bash(1)",
+      "Bash(python:*)",
+      "Bash(cargo deny:*)"
     ],
     "deny": [],
     "ask": []

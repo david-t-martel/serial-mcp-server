@@ -32,7 +32,7 @@ impl AutoNegotiator {
         ];
 
         // Sort by priority (highest first)
-        strategies.sort_by(|a, b| b.priority().cmp(&a.priority()));
+        strategies.sort_by_key(|s| std::cmp::Reverse(s.priority()));
 
         Self { strategies }
     }
@@ -40,7 +40,7 @@ impl AutoNegotiator {
     /// Create a negotiator with custom strategies.
     pub fn with_strategies(strategies: Vec<Box<dyn NegotiationStrategy>>) -> Self {
         let mut strategies = strategies;
-        strategies.sort_by(|a, b| b.priority().cmp(&a.priority()));
+        strategies.sort_by_key(|s| std::cmp::Reverse(s.priority()));
         Self { strategies }
     }
 
@@ -48,7 +48,7 @@ impl AutoNegotiator {
     pub fn add_strategy(mut self, strategy: Box<dyn NegotiationStrategy>) -> Self {
         self.strategies.push(strategy);
         self.strategies
-            .sort_by(|a, b| b.priority().cmp(&a.priority()));
+            .sort_by_key(|s| std::cmp::Reverse(s.priority()));
         self
     }
 

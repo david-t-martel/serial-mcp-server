@@ -48,7 +48,17 @@ else
 fi
 echo ""
 
-# 4. Documentation check
+# 4. Service layer tests
+echo "🔧 Running service layer tests..."
+if cargo test service --all-features; then
+    echo -e "${GREEN}✓${NC} Service layer tests passed"
+else
+    echo -e "${RED}✗${NC} Service layer tests failed"
+    FAILED=1
+fi
+echo ""
+
+# 5. Documentation check
 echo "📚 Checking documentation builds..."
 if cargo doc --no-deps --all-features --quiet; then
     echo -e "${GREEN}✓${NC} Documentation check passed"
@@ -58,7 +68,38 @@ else
 fi
 echo ""
 
-# 5. Cargo deny check (if installed)
+# 6. MCP server validation (quick smoke test)
+echo "🔌 Validating MCP server binary..."
+if cargo build --release --features mcp --quiet; then
+    # Check if binary exists and has expected size
+    if [ -f "target/release/serial_mcp_agent" ] || [ -f "target/release/serial_mcp_agent.exe" ]; then
+        echo -e "${GREEN}✓${NC} MCP server binary built successfully"
+    else
+        echo -e "${RED}✗${NC} MCP server binary not found"
+        FAILED=1
+    fi
+else
+    echo -e "${RED}✗${NC} MCP server build failed"
+    FAILED=1
+fi
+echo ""
+
+# 7. Validate mcp.json schema
+echo "📋 Validating mcp.json..."
+if [ -f "mcp.json" ]; then
+    # Check if mcp.json is valid JSON
+    if python3 -c "import json; json.load(open('mcp.json'))" 2>/dev/null || python -c "import json; json.load(open('mcp.json'))" 2>/dev/null; then
+        echo -e "${GREEN}✓${NC} mcp.json is valid JSON"
+    else
+        echo -e "${RED}✗${NC} mcp.json is not valid JSON"
+        FAILED=1
+    fi
+else
+    echo -e "${YELLOW}⚠${NC}  mcp.json not found"
+fi
+echo ""
+
+# 8. Cargo deny check (if installed)
 if command -v cargo-deny &> /dev/null; then
     echo "🔒 Running cargo deny (dependencies, licenses, advisories)..."
     if cargo deny check 2>&1; then
@@ -75,7 +116,7 @@ else
     echo ""
 fi
 
-# 6. Cargo audit check (if installed)
+# 9. Cargo audit check (if installed)
 if command -v cargo-audit &> /dev/null; then
     echo "🛡️  Running cargo audit (security advisories)..."
     if cargo audit; then
