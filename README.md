@@ -16,13 +16,30 @@ Core Capabilities (v3.1)
 * Session Analytics: Persistent session logging with feature tagging, directional metadata, latency capture, filtering, and feature index aggregation.
 * Metrics & Health: Real‑time cumulative counters (bytes read / written, open duration, idle auto‑close count) via the `metrics` tool.
 
-Feature Flags
--------------
+Feature Flags & Interfaces
+---------------------------
 
- 
-* `mcp` (default): Enables the official `rust-mcp-sdk` server (recommended).
-* `rest-api` (default): Placeholder for future HTTP surface (currently minimal / deprecated path).
-* Build without MCP (not recommended) to expose a deprecated legacy stdio command interface.
+The project supports multiple interfaces for different use cases. All interfaces are equally valid and fully supported:
+
+* **MCP** (default): LLM agent integration via Model Context Protocol
+* **REST API** (opt-in): Web clients, HTTP-based automation, test frameworks  
+* **stdio** (opt-in): Simple scripting, legacy integrations, command-line tools
+* **WebSocket** (opt-in): Real-time streaming for monitoring applications
+
+Build examples:
+```bash
+# MCP-only (default, minimal binary)
+cargo build --release
+
+# With REST API for web clients/testing
+cargo build --release --features rest-api
+
+# With stdio for scripting
+cargo build --release --features legacy-stdio
+
+# Full feature set
+cargo build --release --all-features
+```
 
 Build & Workflow
 ----------------
@@ -72,12 +89,16 @@ Serial / Port Control:
 
 Session Persistence & Analytics:
 
-1. `create_session`    → Create a persistent session log (returns session id).
-2. `append_message`    → Append a message with extended metadata.
-3. `list_messages`     → List messages (ascending; optional limit).
-4. `export_session`    → Export full session JSON (metadata + ordered messages).
-5. `filter_messages`   → Filter messages by role / feature substring / direction.
-6. `feature_index`     → Aggregate feature tag counts.
+1. `create_session`      → Create a persistent session log (returns session id).
+2. `append_message`      → Append a message with extended metadata.
+3. `list_sessions`       → List all sessions with filtering (open/closed) and optional limit.
+4. `close_session`       → Close a session by marking it as closed.
+5. `list_messages`       → List messages (ascending; optional limit).
+6. `list_messages_range` → List messages with cursor-based pagination (after_message_id).
+7. `export_session`      → Export full session JSON (metadata + ordered messages).
+8. `filter_messages`     → Filter messages by role / feature substring / direction.
+9. `feature_index`       → Aggregate feature tag counts.
+10. `session_stats`      → Session statistics (message count, timestamps).
 
 Serial Configuration (open_port)
 --------------------------------

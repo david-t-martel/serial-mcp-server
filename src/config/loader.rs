@@ -44,7 +44,10 @@ impl ConfigLoader {
 
         apply_env_overrides(&mut config)?;
 
-        Ok(Self { config_path, config })
+        Ok(Self {
+            config_path,
+            config,
+        })
     }
 
     /// Load configuration from a specific file path.
@@ -287,6 +290,9 @@ mod tests {
 
     #[test]
     fn test_default_loader() {
+        // Clean up any environment variables that might affect this test
+        env::remove_var("RUST_COMM_SERVER_PORT");
+        
         let loader = ConfigLoader::with_defaults();
         assert_eq!(loader.config().server.port, 3000);
     }

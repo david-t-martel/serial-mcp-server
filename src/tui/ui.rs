@@ -101,8 +101,8 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
         ),
     ]);
 
-    let header_widget = Paragraph::new(header)
-        .style(Style::default().bg(Color::from(app.theme.selection)));
+    let header_widget =
+        Paragraph::new(header).style(Style::default().bg(Color::from(app.theme.selection)));
 
     frame.render_widget(header_widget, area);
 }
@@ -295,8 +295,8 @@ fn render_status_bar(app: &App, frame: &mut Frame, area: Rect) {
         ),
     ]);
 
-    let status_widget = Paragraph::new(status)
-        .style(Style::default().bg(Color::from(app.theme.selection)));
+    let status_widget =
+        Paragraph::new(status).style(Style::default().bg(Color::from(app.theme.selection)));
 
     frame.render_widget(status_widget, area);
 }
@@ -372,10 +372,7 @@ fn render_config_overlay(app: &App, frame: &mut Frame, area: Rect) {
         )),
         Line::from(""),
         Line::from(format!("Theme: {}", app.config.tui.theme)),
-        Line::from(format!(
-            "Default Baud: {}",
-            app.config.serial.default_baud
-        )),
+        Line::from(format!("Default Baud: {}", app.config.serial.default_baud)),
         Line::from(format!(
             "Timeout: {} ms",
             app.config.serial.default_timeout_ms

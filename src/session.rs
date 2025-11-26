@@ -125,6 +125,26 @@ impl SessionStore {
             .await
     }
 
+    /// List all sessions, optionally filtered by open/closed status.
+    /// Returns sessions in reverse chronological order (most recent first).
+    pub async fn list_sessions(
+        &self,
+        include_closed: bool,
+        limit: Option<i64>,
+    ) -> sqlx::Result<Vec<Session>> {
+        let mut sql = String::from("SELECT * FROM sessions");
+        if !include_closed {
+            sql.push_str(" WHERE closed = 0");
+        }
+        sql.push_str(" ORDER BY created_at DESC");
+        if let Some(lim) = limit {
+            sql.push_str(&format!(" LIMIT {}", lim));
+        }
+        sqlx::query_as::<_, Session>(&sql)
+            .fetch_all(&self.pool)
+            .await
+    }
+
     pub async fn append_message(
         &self,
         session_id: &str,
@@ -159,6 +179,30 @@ impl SessionStore {
         .bind(limit)
         .fetch_all(&self.pool)
         .await
+    }
+
+    /// List messages with pagination support using cursor-based pagination.
+    /// Returns messages starting after the specified message ID.
+    pub async fn list_messages_range(
+        &self,
+        session_id: &str,
+        start_after_id: Option<i64>,
+        limit: i64,
+    ) -> sqlx::Result<Vec<Message>> {
+        let messages = if let Some(after_id) = start_after_id {
+            sqlx::query_as::<_, Message>(
+                "SELECT * FROM messages WHERE session_id = ?1 AND id > ?2 ORDER BY id ASC LIMIT ?3",
+            )
+            .bind(session_id)
+            .bind(after_id)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            // No cursor provided, start from beginning
+            self.list_messages(session_id, limit).await?
+        };
+        Ok(messages)
     }
 
     pub async fn filter_messages(

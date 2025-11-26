@@ -37,26 +37,49 @@ pub struct PortConfig {
     pub idle_disconnect_ms: Option<u64>,
 }
 
-fn default_baud() -> u32 {
-    9600
+// Default configuration constants
+pub const DEFAULT_BAUD_RATE: u32 = 9600;
+pub const DEFAULT_TIMEOUT_MS: u64 = 1000;
+pub const DEFAULT_RECONFIG_BAUD_RATE: u32 = 9600;
+
+/// Default baud rate for serial port configuration (9600 bps).
+pub fn default_baud() -> u32 {
+    DEFAULT_BAUD_RATE
 }
-fn default_timeout() -> u64 {
-    1000
+
+/// Default timeout for serial port operations (1000 ms).
+pub fn default_timeout() -> u64 {
+    DEFAULT_TIMEOUT_MS
 }
-fn default_data_bits() -> DataBitsCfg {
+
+/// Default data bits configuration (8 bits).
+pub fn default_data_bits() -> DataBitsCfg {
     DataBitsCfg::Eight
 }
-fn default_parity() -> ParityCfg {
+
+/// Default parity configuration (none).
+pub fn default_parity() -> ParityCfg {
     ParityCfg::None
 }
-fn default_stop_bits() -> StopBitsCfg {
+
+/// Default stop bits configuration (1 bit).
+pub fn default_stop_bits() -> StopBitsCfg {
     StopBitsCfg::One
 }
-fn default_flow_control() -> FlowControlCfg {
+
+/// Default flow control configuration (none).
+pub fn default_flow_control() -> FlowControlCfg {
     FlowControlCfg::None
 }
-fn default_terminator() -> Option<String> {
+
+/// Default terminator for serial communication (newline).
+pub fn default_terminator() -> Option<String> {
     Some("\n".into())
+}
+
+/// Default baud rate for port reconfiguration (9600 bps).
+pub fn default_reconfig_baud() -> u32 {
+    DEFAULT_RECONFIG_BAUD_RATE
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, JsonSchema)]

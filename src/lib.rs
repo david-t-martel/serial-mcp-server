@@ -67,4 +67,4 @@ pub use negotiation::{
 };
 
 // Re-export config types
-pub use config::{Config, ConfigLoader, ConfigError, ConfigResult};
+pub use config::{Config, ConfigError, ConfigLoader, ConfigResult};

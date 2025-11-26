@@ -1,7 +1,11 @@
 use clap::Parser;
-use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+
+#[cfg(feature = "rest-api")]
+use std::net::SocketAddr;
+#[cfg(feature = "rest-api")]
 use tokio::net::TcpListener;
+#[cfg(feature = "rest-api")]
 use tokio::signal;
 
 // All modules are now in the library - import what we need
@@ -36,6 +40,7 @@ struct Args {
 // --- Main Application Entry Point ---
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg_attr(not(feature = "rest-api"), allow(unused_variables))]
     let args = Args::parse();
     // Initialize tracing subscriber once. Keep stdout clean for MCP framed protocol; send logs to stderr.
     let env_filter = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into());
@@ -90,10 +95,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     tracing::error!(error = %e, "MCP server exited with error");
                 }
             }
-            #[cfg(not(feature = "mcp"))]
+            #[cfg(all(feature = "legacy-stdio", not(feature = "mcp")))]
             {
                 tracing::warn!("MCP feature disabled, falling back to legacy stdio JSON mode");
-                stdio::run_stdio_interface(app_state.clone()).await;
+                serial_mcp_agent::stdio::run_stdio_interface(app_state.clone()).await;
+            }
+            #[cfg(all(not(feature = "mcp"), not(feature = "legacy-stdio")))]
+            {
+                tracing::error!("No interface enabled. Rebuild with 'mcp' feature (default) or 'legacy-stdio' for deprecated fallback.");
+                std::process::exit(1);
             }
         }
     }
@@ -106,10 +116,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tracing::error!(error = %e, "MCP server exited with error");
             }
         }
-        #[cfg(not(feature = "mcp"))]
+        #[cfg(all(feature = "legacy-stdio", not(feature = "mcp")))]
         {
             tracing::warn!("MCP feature disabled, falling back to legacy stdio JSON mode");
-            stdio::run_stdio_interface(app_state.clone()).await;
+            serial_mcp_agent::stdio::run_stdio_interface(app_state.clone()).await;
+        }
+        #[cfg(all(not(feature = "mcp"), not(feature = "legacy-stdio")))]
+        {
+            tracing::error!("No interface enabled. Rebuild with 'mcp' feature (default) or 'legacy-stdio' for deprecated fallback.");
+            std::process::exit(1);
         }
     }
 
@@ -132,6 +147,7 @@ async fn http_list_ports() -> AppResult<axum::Json<serde_json::Value>> {
 }
 
 // --- Graceful Shutdown Handler ---
+#[cfg(feature = "rest-api")]
 async fn shutdown_signal() {
     let ctrl_c = async {
         if let Err(e) = signal::ctrl_c().await {

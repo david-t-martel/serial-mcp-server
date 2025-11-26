@@ -55,9 +55,11 @@ pub use schema::{
     ServerMode, TestDiscoveryConfig, TestingConfig, TuiConfig,
 };
 
-// TODO: Implement ConfigWatcher for hot-reload feature
+// Future: ConfigWatcher for hot-reload feature
 // #[cfg(feature = "hot-reload")]
 // mod watcher;
 //
 // #[cfg(feature = "hot-reload")]
 // pub use watcher::ConfigWatcher;
+//
+// Note: Configuration persistence (save/load) is fully implemented in loader.rs

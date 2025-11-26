@@ -17,14 +17,21 @@ use rust_mcp_sdk::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::{io::Write, sync::Arc, time::Duration};
+use std::{io::Write, sync::Arc};
+
+#[cfg(feature = "auto-negotiation")]
+use std::time::Duration;
 
 // CallToolError lives under schema_utils submodule path
 use rust_mcp_sdk::schema::mcp_2025_06_18::schema_utils::CallToolError;
 
 use crate::service::{OpenConfig, PortService, ReconfigureConfig, ServiceError};
 use crate::session::SessionStore;
-use crate::state::{AppState, DataBitsCfg, FlowControlCfg, ParityCfg, StopBitsCfg};
+use crate::state::{
+    default_data_bits, default_flow_control, default_parity, default_reconfig_baud,
+    default_stop_bits, default_timeout, AppState, DataBitsCfg, FlowControlCfg, ParityCfg,
+    StopBitsCfg,
+};
 
 #[cfg(feature = "auto-negotiation")]
 use crate::state::{PortConfig, PortState};
@@ -91,7 +98,7 @@ pub struct ListPortsTool {}
 pub struct OpenPortTool {
     pub port_name: String,
     pub baud_rate: u32,
-    #[serde(default = "default_timeout_ms")]
+    #[serde(default = "default_timeout")]
     pub timeout_ms: u64,
     #[serde(default = "default_data_bits")]
     pub data_bits: DataBitsCfg,
@@ -105,21 +112,6 @@ pub struct OpenPortTool {
     pub terminator: Option<String>,
     #[serde(default)]
     pub idle_disconnect_ms: Option<u64>,
-}
-fn default_timeout_ms() -> u64 {
-    1000
-}
-fn default_data_bits() -> DataBitsCfg {
-    DataBitsCfg::Eight
-}
-fn default_parity() -> ParityCfg {
-    ParityCfg::None
-}
-fn default_stop_bits() -> StopBitsCfg {
-    StopBitsCfg::One
-}
-fn default_flow_control() -> FlowControlCfg {
-    FlowControlCfg::None
 }
 
 #[mcp_tool(
@@ -170,7 +162,7 @@ pub struct ReconfigurePortTool {
     pub port_name: Option<String>,
     #[serde(default = "default_reconfig_baud")]
     pub baud_rate: u32,
-    #[serde(default = "default_timeout_ms")]
+    #[serde(default = "default_timeout")]
     pub timeout_ms: u64,
     #[serde(default = "default_data_bits")]
     pub data_bits: DataBitsCfg,
@@ -184,9 +176,6 @@ pub struct ReconfigurePortTool {
     pub terminator: Option<String>,
     #[serde(default)]
     pub idle_disconnect_ms: Option<u64>,
-}
-fn default_reconfig_baud() -> u32 {
-    9600
 }
 
 // --- Session Tool Schemas ---
@@ -265,6 +254,40 @@ pub struct SessionStatsTool {
 }
 
 #[mcp_tool(
+    name = "list_sessions",
+    description = "List all sessions, optionally filtered by open/closed status"
+)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct ListSessionsTool {
+    #[serde(default = "default_include_closed")]
+    pub include_closed: bool,
+    pub limit: Option<u64>,
+}
+fn default_include_closed() -> bool {
+    false
+}
+
+#[mcp_tool(
+    name = "close_session",
+    description = "Close a session by marking it as closed"
+)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct CloseSessionTool {
+    pub session_id: String,
+}
+
+#[mcp_tool(
+    name = "list_messages_range",
+    description = "List messages with cursor-based pagination (start after a specific message ID)"
+)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct ListMessagesRangeTool {
+    pub session_id: String,
+    pub after_message_id: Option<i64>,
+    pub limit: Option<u64>,
+}
+
+#[mcp_tool(
     name = "list_ports_extended",
     description = "List serial ports with extended metadata (VID/PID, manufacturer, product, serial number, type)"
 )]
@@ -293,6 +316,7 @@ pub struct DetectPortTool {
     #[serde(default)]
     pub preferred_strategy: Option<String>,
 }
+#[cfg(feature = "auto-negotiation")]
 fn default_detect_timeout_ms() -> u64 {
     500
 }
@@ -311,7 +335,7 @@ pub struct OpenPortAutoTool {
     pub pid: Option<String>,
     #[serde(default)]
     pub manufacturer: Option<String>,
-    #[serde(default = "default_timeout_ms")]
+    #[serde(default = "default_timeout")]
     pub timeout_ms: u64,
     #[serde(default)]
     pub terminator: Option<String>,
@@ -751,6 +775,78 @@ impl SerialServerHandler {
             CallToolResult::text_content(vec![TextContent::from("feature index".to_string())])
                 .with_structured_content(structured),
         )
+    }
+    async fn list_sessions_impl(
+        &self,
+        include_closed: bool,
+        limit: Option<usize>,
+    ) -> Result<CallToolResult, CallToolError> {
+        let sessions = self
+            .sessions
+            .list_sessions(include_closed, limit.map(|l| l as i64))
+            .await
+            .map_err(|e| CallToolError::from_message(e.to_string()))?;
+        let mut structured = serde_json::Map::new();
+        structured.insert(
+            "sessions".into(),
+            serde_json::to_value(sessions).unwrap_or_default(),
+        );
+        Ok(
+            CallToolResult::text_content(vec![TextContent::from("sessions listed".to_string())])
+                .with_structured_content(structured),
+        )
+    }
+    async fn close_session_impl(
+        &self,
+        session_id: String,
+    ) -> Result<CallToolResult, CallToolError> {
+        self.sessions
+            .close_session(&session_id)
+            .await
+            .map_err(|e| CallToolError::from_message(e.to_string()))?;
+        let mut structured = serde_json::Map::new();
+        structured.insert(
+            "session_id".into(),
+            serde_json::Value::String(session_id.clone()),
+        );
+        structured.insert("closed".into(), serde_json::Value::Bool(true));
+        Ok(CallToolResult::text_content(vec![TextContent::from(format!(
+            "session {} closed",
+            session_id
+        ))])
+        .with_structured_content(structured))
+    }
+    async fn list_messages_range_impl(
+        &self,
+        session_id: String,
+        after_message_id: Option<i64>,
+        limit: usize,
+    ) -> Result<CallToolResult, CallToolError> {
+        let messages = self
+            .sessions
+            .list_messages_range(&session_id, after_message_id, limit as i64)
+            .await
+            .map_err(|e| CallToolError::from_message(e.to_string()))?;
+        let mut structured = serde_json::Map::new();
+        structured.insert(
+            "messages".into(),
+            serde_json::to_value(&messages).unwrap_or_default(),
+        );
+        structured.insert(
+            "count".into(),
+            serde_json::Value::Number(messages.len().into()),
+        );
+        if let Some(last_msg) = messages.last() {
+            // Add cursor hint for pagination (last message ID for next request)
+            structured.insert(
+                "next_cursor".into(),
+                serde_json::Value::Number(last_msg.id.into()),
+            );
+        }
+        Ok(CallToolResult::text_content(vec![TextContent::from(
+            "messages listed (range)".to_string(),
+        )])
+        .with_structured_content(structured))
     }
 
     // --- Auto-Negotiation Methods (Phase 4) ---
@@ -1369,6 +1465,50 @@ impl ServerHandler for SerialServerHandler {
                     "session stats".to_string(),
                 )])
                 .with_structured_content(structured));
+            }
+            n if n == ListSessionsTool::tool_name() => {
+                let args = req.params.arguments.clone().unwrap_or_default();
+                let include_closed = args
+                    .get("include_closed")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let limit = args
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .map(|l| l as usize);
+                return self.list_sessions_impl(include_closed, limit).await;
+            }
+            n if n == CloseSessionTool::tool_name() => {
+                let args = req.params.arguments.clone().unwrap_or_default();
+                let session_id = args
+                    .get("session_id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        CallToolError::invalid_arguments(
+                            CloseSessionTool::tool_name(),
+                            Some("session_id missing".into()),
+                        )
+                    })?
+                    .to_string();
+                return self.close_session_impl(session_id).await;
+            }
+            n if n == ListMessagesRangeTool::tool_name() => {
+                let args = req.params.arguments.clone().unwrap_or_default();
+                let session_id = args
+                    .get("session_id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        CallToolError::invalid_arguments(
+                            ListMessagesRangeTool::tool_name(),
+                            Some("session_id missing".into()),
+                        )
+                    })?
+                    .to_string();
+                let after_message_id = args.get("after_message_id").and_then(|v| v.as_i64());
+                let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
+                return self
+                    .list_messages_range_impl(session_id, after_message_id, limit)
+                    .await;
             }
             #[cfg(feature = "auto-negotiation")]
             n if n == DetectPortTool::tool_name() => {

@@ -70,10 +70,13 @@ libc = "0.2"
 winapi = { version = "0.3", features = ["winuser", "winerror"] }
 
 [features]
-default = ["mcp", "rest-api"]
+# Default features: MCP-only for minimal builds
+# For REST API support, use: cargo build --features rest-api
+default = ["mcp"]
 
 # Official MCP SDK integration
 mcp = ["rust-mcp-sdk"]
+# REST API (opt-in) - adds ~8 dependencies
 rest-api = ["axum"]
 
 # Async serial support (Phase 3)
@@ -90,6 +93,9 @@ openapi = ["utoipa", "utoipa-swagger-ui"]
 
 # Optional: build without stdio (provide only HTTP) later if needed
 stdio-only = []
+
+# Legacy stdio interface (deprecated) - only for backwards compatibility
+legacy-stdio = []
 
 # Hardware testing - requires real serial devices
 hardware-tests = []

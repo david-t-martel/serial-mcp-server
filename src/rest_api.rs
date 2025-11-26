@@ -14,7 +14,11 @@ use std::{sync::Arc, time::Duration};
 
 use crate::{
     session::SessionStore,
-    state::{AppState, DataBitsCfg, FlowControlCfg, ParityCfg, StopBitsCfg},
+    state::{
+        default_data_bits, default_flow_control, default_parity, default_reconfig_baud,
+        default_stop_bits, default_timeout, AppState, DataBitsCfg, FlowControlCfg, ParityCfg,
+        StopBitsCfg,
+    },
 };
 
 #[cfg(feature = "auto-negotiation")]
@@ -35,7 +39,7 @@ pub struct RestContext {
 pub struct OpenRequest {
     pub port_name: String,
     pub baud_rate: u32,
-    #[serde(default = "default_timeout_ms")]
+    #[serde(default = "default_timeout")]
     pub timeout_ms: u64,
     #[serde(default = "default_data_bits")]
     pub data_bits: DataBitsCfg,
@@ -49,21 +53,6 @@ pub struct OpenRequest {
     pub terminator: Option<String>,
     #[serde(default)]
     pub idle_disconnect_ms: Option<u64>,
-}
-fn default_timeout_ms() -> u64 {
-    1000
-}
-fn default_data_bits() -> DataBitsCfg {
-    DataBitsCfg::Eight
-}
-fn default_parity() -> ParityCfg {
-    ParityCfg::None
-}
-fn default_stop_bits() -> StopBitsCfg {
-    StopBitsCfg::One
-}
-fn default_flow_control() -> FlowControlCfg {
-    FlowControlCfg::None
 }
 
 #[derive(Deserialize)]
@@ -76,7 +65,7 @@ pub struct ReconfigureRequest {
     pub port_name: Option<String>,
     #[serde(default = "default_reconfig_baud")]
     pub baud_rate: u32,
-    #[serde(default = "default_timeout_ms")]
+    #[serde(default = "default_timeout")]
     pub timeout_ms: u64,
     #[serde(default = "default_data_bits")]
     pub data_bits: DataBitsCfg,
@@ -90,9 +79,6 @@ pub struct ReconfigureRequest {
     pub terminator: Option<String>,
     #[serde(default)]
     pub idle_disconnect_ms: Option<u64>,
-}
-fn default_reconfig_baud() -> u32 {
-    9600
 }
 
 // ---------- Auto-Negotiation DTOs (feature-gated) ----------
@@ -128,7 +114,7 @@ pub struct OpenPortAutoRequest {
     pub pid: Option<String>,
     #[serde(default)]
     pub manufacturer: Option<String>,
-    #[serde(default = "default_timeout_ms")]
+    #[serde(default = "default_timeout")]
     pub timeout_ms: u64,
     #[serde(default)]
     pub terminator: Option<String>,
