@@ -66,6 +66,71 @@ pub struct WriteRequest {
     pub data: String,
 }
 
+#[derive(Deserialize)]
+pub struct ReconfigureRequest {
+    pub port_name: Option<String>,
+    #[serde(default = "default_reconfig_baud")]
+    pub baud_rate: u32,
+    #[serde(default = "default_timeout_ms")]
+    pub timeout_ms: u64,
+    #[serde(default = "default_data_bits")]
+    pub data_bits: DataBitsCfg,
+    #[serde(default = "default_parity")]
+    pub parity: ParityCfg,
+    #[serde(default = "default_stop_bits")]
+    pub stop_bits: StopBitsCfg,
+    #[serde(default = "default_flow_control")]
+    pub flow_control: FlowControlCfg,
+    #[serde(default)]
+    pub terminator: Option<String>,
+    #[serde(default)]
+    pub idle_disconnect_ms: Option<u64>,
+}
+fn default_reconfig_baud() -> u32 {
+    9600
+}
+
+// ---------- Auto-Negotiation DTOs (feature-gated) ----------
+#[cfg(feature = "auto-negotiation")]
+#[derive(Deserialize)]
+pub struct DetectPortRequest {
+    pub port_name: String,
+    #[serde(default)]
+    pub vid: Option<String>,
+    #[serde(default)]
+    pub pid: Option<String>,
+    #[serde(default)]
+    pub manufacturer: Option<String>,
+    #[serde(default)]
+    pub suggested_baud_rates: Option<Vec<u32>>,
+    #[serde(default = "default_detect_timeout_ms")]
+    pub timeout_ms: u64,
+    #[serde(default)]
+    pub preferred_strategy: Option<String>,
+}
+#[cfg(feature = "auto-negotiation")]
+fn default_detect_timeout_ms() -> u64 {
+    500
+}
+
+#[cfg(feature = "auto-negotiation")]
+#[derive(Deserialize)]
+pub struct OpenPortAutoRequest {
+    pub port_name: String,
+    #[serde(default)]
+    pub vid: Option<String>,
+    #[serde(default)]
+    pub pid: Option<String>,
+    #[serde(default)]
+    pub manufacturer: Option<String>,
+    #[serde(default = "default_timeout_ms")]
+    pub timeout_ms: u64,
+    #[serde(default)]
+    pub terminator: Option<String>,
+    #[serde(default)]
+    pub idle_disconnect_ms: Option<u64>,
+}
+
 // ---------- Session DTOs ----------
 #[derive(Deserialize)]
 pub struct CreateSessionRequest {
@@ -96,7 +161,7 @@ pub struct FilterMessagesParams {
 
 // ---------- Router Builder ----------
 pub fn build_router(ctx: RestContext) -> Router {
-    Router::new()
+    let mut router = Router::new()
         .route("/health", get(health))
         .route("/ports", get(list_ports))
         .route("/ports/extended", get(list_ports_extended))
@@ -106,14 +171,31 @@ pub fn build_router(ctx: RestContext) -> Router {
         .route("/port/close", post(close_port))
         .route("/port/status", get(status_port))
         .route("/port/metrics", get(metrics_port))
+        .route("/port/reconfigure", post(reconfigure_port))
         .route("/sessions", post(create_session))
-        .route("/sessions/:id/messages", get(list_messages))
+        .route("/sessions/{id}/messages", get(list_messages))
         .route("/sessions/messages/append", post(append_message))
-        .route("/sessions/:id/export", get(export_session))
-        .route("/sessions/:id/features", get(feature_index))
-        .route("/sessions/:id/stats", get(session_stats))
-        .route("/sessions/:id/filter", get(filter_messages))
-        .with_state(ctx)
+        .route("/sessions/{id}/export", get(export_session))
+        .route("/sessions/{id}/features", get(feature_index))
+        .route("/sessions/{id}/stats", get(session_stats))
+        .route("/sessions/{id}/filter", get(filter_messages));
+
+    // Add WebSocket route if feature is enabled
+    #[cfg(feature = "websocket")]
+    {
+        router = router.route("/ws/serial", get(crate::websocket::ws_handler));
+    }
+
+    // Add auto-negotiation routes if feature is enabled
+    #[cfg(feature = "auto-negotiation")]
+    {
+        router = router
+            .route("/port/detect", post(detect_port))
+            .route("/port/open_auto", post(open_port_auto))
+            .route("/manufacturers", get(list_manufacturer_profiles));
+    }
+
+    router.with_state(ctx)
 }
 
 // ---------- Handlers ----------
@@ -493,6 +575,267 @@ async fn filter_messages(
         Ok(msgs) => Json(json!({"status":"ok","messages":msgs})),
         Err(e) => Json(err_json("FilterMessagesError", &e.to_string())),
     }
+}
+
+// ---------- Reconfigure Handler ----------
+async fn reconfigure_port(
+    AxumState(ctx): AxumState<RestContext>,
+    Json(req): Json<ReconfigureRequest>,
+) -> Json<Value> {
+    let mut st = ctx.state.lock().unwrap();
+
+    // Determine target port name
+    let target = match (&req.port_name, &*st) {
+        (Some(p), _) => p.clone(),
+        (None, PortState::Open { config, .. }) => config.port_name.clone(),
+        (None, PortState::Closed) => {
+            return Json(err_json(
+                "InvalidPayload",
+                "No port open and no port_name provided",
+            ))
+        }
+    };
+
+    // Build port configuration
+    let config = PortConfiguration {
+        baud_rate: req.baud_rate,
+        data_bits: match req.data_bits {
+            DataBitsCfg::Five => DataBits::Five,
+            DataBitsCfg::Six => DataBits::Six,
+            DataBitsCfg::Seven => DataBits::Seven,
+            DataBitsCfg::Eight => DataBits::Eight,
+        },
+        parity: match req.parity {
+            ParityCfg::None => Parity::None,
+            ParityCfg::Odd => Parity::Odd,
+            ParityCfg::Even => Parity::Even,
+        },
+        stop_bits: match req.stop_bits {
+            StopBitsCfg::One => StopBits::One,
+            StopBitsCfg::Two => StopBits::Two,
+        },
+        flow_control: match req.flow_control {
+            FlowControlCfg::None => FlowControl::None,
+            FlowControlCfg::Hardware => FlowControl::Hardware,
+            FlowControlCfg::Software => FlowControl::Software,
+        },
+        timeout: Duration::from_millis(req.timeout_ms),
+    };
+
+    match SyncSerialPort::open(&target, config) {
+        Ok(port) => {
+            *st = PortState::Open {
+                port: Box::new(port),
+                config: PortConfig {
+                    port_name: target.clone(),
+                    baud_rate: req.baud_rate,
+                    timeout_ms: req.timeout_ms,
+                    data_bits: req.data_bits,
+                    parity: req.parity,
+                    stop_bits: req.stop_bits,
+                    flow_control: req.flow_control,
+                    terminator: req.terminator,
+                    idle_disconnect_ms: req.idle_disconnect_ms,
+                },
+                last_activity: std::time::Instant::now(),
+                timeout_streak: 0,
+                bytes_read_total: 0,
+                bytes_written_total: 0,
+                idle_close_count: 0,
+                open_started: std::time::Instant::now(),
+            };
+            Json(json!({
+                "status": "ok",
+                "message": "reconfigured",
+                "port_name": target,
+                "baud_rate": req.baud_rate
+            }))
+        }
+        Err(e) => Json(err_json("ReconfigureError", &e.to_string())),
+    }
+}
+
+// ---------- Auto-Negotiation Handlers (feature-gated) ----------
+#[cfg(feature = "auto-negotiation")]
+async fn detect_port(
+    AxumState(_ctx): AxumState<RestContext>,
+    Json(req): Json<DetectPortRequest>,
+) -> Json<Value> {
+    use crate::negotiation::{AutoNegotiator, NegotiationHints};
+
+    let mut hints = NegotiationHints::default();
+    hints.timeout_ms = req.timeout_ms;
+
+    // Parse VID/PID from hex strings if provided
+    if let Some(vid_str) = &req.vid {
+        match u16::from_str_radix(vid_str.trim_start_matches("0x"), 16) {
+            Ok(vid) => hints.vid = Some(vid),
+            Err(e) => return Json(err_json("InvalidVID", &e.to_string())),
+        }
+    }
+    if let Some(pid_str) = &req.pid {
+        match u16::from_str_radix(pid_str.trim_start_matches("0x"), 16) {
+            Ok(pid) => hints.pid = Some(pid),
+            Err(e) => return Json(err_json("InvalidPID", &e.to_string())),
+        }
+    }
+
+    hints.manufacturer = req.manufacturer.clone();
+    if let Some(rates) = req.suggested_baud_rates {
+        hints.suggested_baud_rates = rates;
+    }
+
+    let negotiator = AutoNegotiator::new();
+    let params = if let Some(strategy) = &req.preferred_strategy {
+        negotiator
+            .detect_with_preference(&req.port_name, Some(hints), strategy)
+            .await
+    } else {
+        negotiator.detect(&req.port_name, Some(hints)).await
+    };
+
+    match params {
+        Ok(p) => Json(json!({
+            "status": "ok",
+            "port_name": req.port_name,
+            "baud_rate": p.baud_rate,
+            "data_bits": format!("{:?}", p.data_bits).to_lowercase(),
+            "parity": format!("{:?}", p.parity).to_lowercase(),
+            "stop_bits": format!("{:?}", p.stop_bits).to_lowercase(),
+            "flow_control": format!("{:?}", p.flow_control).to_lowercase(),
+            "strategy_used": p.strategy_used,
+            "confidence": p.confidence
+        })),
+        Err(e) => Json(err_json("DetectionFailed", &e.to_string())),
+    }
+}
+
+#[cfg(feature = "auto-negotiation")]
+async fn open_port_auto(
+    AxumState(ctx): AxumState<RestContext>,
+    Json(req): Json<OpenPortAutoRequest>,
+) -> Json<Value> {
+    use crate::negotiation::{AutoNegotiator, NegotiationHints};
+
+    // Check if port is already open
+    {
+        let st = ctx.state.lock().unwrap();
+        if matches!(&*st, PortState::Open { .. }) {
+            return Json(err_json("PortAlreadyOpen", "Port already open"));
+        }
+    }
+
+    // Build hints for auto-detection
+    let mut hints = NegotiationHints::default();
+    hints.timeout_ms = req.timeout_ms;
+
+    if let Some(vid_str) = &req.vid {
+        match u16::from_str_radix(vid_str.trim_start_matches("0x"), 16) {
+            Ok(vid) => hints.vid = Some(vid),
+            Err(e) => return Json(err_json("InvalidVID", &e.to_string())),
+        }
+    }
+    if let Some(pid_str) = &req.pid {
+        match u16::from_str_radix(pid_str.trim_start_matches("0x"), 16) {
+            Ok(pid) => hints.pid = Some(pid),
+            Err(e) => return Json(err_json("InvalidPID", &e.to_string())),
+        }
+    }
+    hints.manufacturer = req.manufacturer.clone();
+
+    // Auto-detect parameters
+    let negotiator = AutoNegotiator::new();
+    let params = match negotiator.detect(&req.port_name, Some(hints)).await {
+        Ok(p) => p,
+        Err(e) => return Json(err_json("DetectionFailed", &e.to_string())),
+    };
+
+    // Open the port with detected parameters
+    let config = PortConfiguration {
+        baud_rate: params.baud_rate,
+        timeout: Duration::from_millis(req.timeout_ms),
+        data_bits: params.data_bits,
+        parity: params.parity,
+        stop_bits: params.stop_bits,
+        flow_control: params.flow_control,
+    };
+
+    match SyncSerialPort::open(&req.port_name, config) {
+        Ok(port) => {
+            let mut st = ctx.state.lock().unwrap();
+            *st = PortState::Open {
+                port: Box::new(port),
+                config: PortConfig {
+                    port_name: req.port_name.clone(),
+                    baud_rate: params.baud_rate,
+                    timeout_ms: req.timeout_ms,
+                    data_bits: match params.data_bits {
+                        crate::port::DataBits::Five => DataBitsCfg::Five,
+                        crate::port::DataBits::Six => DataBitsCfg::Six,
+                        crate::port::DataBits::Seven => DataBitsCfg::Seven,
+                        crate::port::DataBits::Eight => DataBitsCfg::Eight,
+                    },
+                    parity: match params.parity {
+                        crate::port::Parity::None => ParityCfg::None,
+                        crate::port::Parity::Odd => ParityCfg::Odd,
+                        crate::port::Parity::Even => ParityCfg::Even,
+                    },
+                    stop_bits: match params.stop_bits {
+                        crate::port::StopBits::One => StopBitsCfg::One,
+                        crate::port::StopBits::Two => StopBitsCfg::Two,
+                    },
+                    flow_control: match params.flow_control {
+                        crate::port::FlowControl::None => FlowControlCfg::None,
+                        crate::port::FlowControl::Hardware => FlowControlCfg::Hardware,
+                        crate::port::FlowControl::Software => FlowControlCfg::Software,
+                    },
+                    terminator: req.terminator,
+                    idle_disconnect_ms: req.idle_disconnect_ms,
+                },
+                last_activity: std::time::Instant::now(),
+                timeout_streak: 0,
+                bytes_read_total: 0,
+                bytes_written_total: 0,
+                idle_close_count: 0,
+                open_started: std::time::Instant::now(),
+            };
+            Json(json!({
+                "status": "ok",
+                "message": "opened (auto-detected)",
+                "port_name": req.port_name,
+                "baud_rate": params.baud_rate,
+                "strategy_used": params.strategy_used,
+                "confidence": params.confidence
+            }))
+        }
+        Err(e) => Json(err_json("OpenError", &e.to_string())),
+    }
+}
+
+#[cfg(feature = "auto-negotiation")]
+async fn list_manufacturer_profiles(
+    AxumState(_ctx): AxumState<RestContext>,
+) -> Json<Value> {
+    use crate::negotiation::AutoNegotiator;
+
+    let profiles = AutoNegotiator::all_manufacturer_profiles();
+    let profile_list: Vec<_> = profiles
+        .iter()
+        .map(|p| {
+            json!({
+                "vid": format!("0x{:04X}", p.vid),
+                "name": p.name,
+                "default_baud": p.default_baud,
+                "common_bauds": p.common_bauds,
+            })
+        })
+        .collect();
+
+    Json(json!({
+        "status": "ok",
+        "profiles": profile_list,
+        "count": profiles.len()
+    }))
 }
 
 // ---------- Helpers ----------

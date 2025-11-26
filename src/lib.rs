@@ -30,6 +30,10 @@ pub mod stdio;
 #[cfg(feature = "auto-negotiation")]
 pub mod negotiation;
 
+// Phase 5: WebSocket streaming
+#[cfg(feature = "websocket")]
+pub mod websocket;
+
 // Re-export commonly used types for convenience
 pub use error::AppError;
 pub use port::{

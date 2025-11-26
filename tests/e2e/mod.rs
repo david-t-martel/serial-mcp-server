@@ -7,3 +7,7 @@
 pub mod discovery_tests;
 pub mod negotiation_tests;
 pub mod workflow_tests;
+
+// WebSocket streaming tests (Phase 5)
+#[cfg(all(feature = "rest-api", feature = "websocket"))]
+pub mod websocket_tests;

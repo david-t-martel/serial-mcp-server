@@ -37,7 +37,7 @@ futures = { version = "0.3", optional = true }
 # Phase 5: OpenAPI documentation
 utoipa = { version = "5.2", features = ["axum_extras"], optional = true }
 utoipa-swagger-ui = { version = "8.0", features = ["axum"], optional = true }
-tokio-stream = { version = "0.1", optional = true }
+tokio-stream = { version = "0.1", features = ["sync"], optional = true }
 
 [features]
 default = ["mcp", "rest-api"]
@@ -53,7 +53,7 @@ async-serial = ["tokio-serial", "futures"]
 auto-negotiation = ["async-serial"]
 
 # WebSocket streaming (Phase 5)
-websocket = ["rest-api", "tokio-stream"]
+websocket = ["rest-api", "tokio-stream", "futures"]
 
 # OpenAPI documentation (Phase 5)
 openapi = ["utoipa", "utoipa-swagger-ui"]
@@ -77,6 +77,9 @@ tokio-test = "0.4"
 pretty_assertions = "1.4"
 serial_test = "3.0"
 tempfile = "3.10"
+
+# Phase 5: WebSocket testing
+tokio-tungstenite = "0.24"
 
 [[bench]]
 name = "basic"
