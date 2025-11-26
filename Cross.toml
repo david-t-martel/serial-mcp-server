@@ -1,0 +1,50 @@
+# Cross-compilation configuration for rust-comm
+# https://github.com/cross-rs/cross
+
+[build]
+# Use pre-build hooks if needed
+# pre-build = ["./scripts/pre-build.sh"]
+
+[target.aarch64-unknown-linux-gnu]
+# Use Ubuntu 22.04 base image with GCC 11 for ARM64
+# This image includes necessary tools for compiling native dependencies
+image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5"
+
+# Environment variables for the build
+[target.aarch64-unknown-linux-gnu.env]
+passthrough = [
+    "RUST_BACKTRACE",
+    "RUST_LOG",
+]
+
+# Build configuration
+[build.env]
+volumes = [
+    # Mount cargo registry to speed up builds
+    "CARGO_HOME=/root/.cargo",
+]
+
+# Alternative: If you need a custom image with additional dependencies
+# Uncomment and customize as needed:
+#
+# [target.aarch64-unknown-linux-gnu]
+# dockerfile = "./docker/aarch64.Dockerfile"
+#
+# Then create docker/aarch64.Dockerfile:
+# FROM ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5
+# RUN apt-get update && apt-get install -y \
+#     libudev-dev \
+#     pkg-config \
+#     && rm -rf /var/lib/apt/lists/*
+
+# Notes:
+# 1. serialport crate requires libudev-dev on Linux (included in cross image)
+# 2. For Raspberry Pi deployment, use aarch64-unknown-linux-gnu target
+# 3. For AWS Graviton, use aarch64-unknown-linux-gnu target
+#
+# Build command:
+#   cargo install cross
+#   cross build --target aarch64-unknown-linux-gnu --release
+#
+# The resulting binary will be in:
+#   target/aarch64-unknown-linux-gnu/release/serial_mcp_agent

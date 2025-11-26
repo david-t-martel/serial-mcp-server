@@ -1,0 +1,76 @@
+{
+  "name": "serial-mcp-agent",
+  "description": "Serial Port MCP Server with WebSocket streaming, auto-negotiation, service layer, and comprehensive tooling",
+  "version": "3.2.0",
+  "entry": {
+    "command": "serial_mcp_agent",
+    "args": [],
+    "transport": "stdio"
+  },
+  "tools": [
+    "list_ports",
+    "list_ports_extended",
+    "open_port",
+    "open_port_auto",
+    "detect_port",
+    "reconfigure_port",
+    "write",
+    "read",
+    "close",
+    "status",
+    "metrics",
+    "create_session",
+    "append_message",
+    "list_messages",
+    "export_session",
+    "filter_messages",
+    "feature_index",
+    "session_stats",
+    "list_manufacturer_profiles"
+  ],
+  "features": {
+    "default": ["mcp", "rest-api"],
+    "async-serial": "Async serial I/O with tokio-serial",
+    "auto-negotiation": "Auto-detect baud rate and parameters",
+    "websocket": "Real-time WebSocket streaming at /ws/serial",
+    "openapi": "OpenAPI/Swagger documentation"
+  },
+  "endpoints": {
+    "rest": {
+      "health": "GET /health",
+      "list_ports": "GET /ports",
+      "list_ports_extended": "GET /ports/extended",
+      "open_port": "POST /port/open",
+      "write": "POST /port/write",
+      "read": "POST /port/read",
+      "close": "POST /port/close",
+      "status": "GET /port/status",
+      "metrics": "GET /port/metrics",
+      "reconfigure": "POST /port/reconfigure",
+      "detect": "POST /port/detect",
+      "open_auto": "POST /port/open_auto",
+      "manufacturers": "GET /manufacturers"
+    },
+    "websocket": "GET /ws/serial"
+  },
+  "env": {
+    "RUST_LOG": "info",
+    "SESSION_DB_URL": "sqlite://sessions.db",
+    "MCP_DISABLE_HEARTBEAT": "optional - disable startup heartbeat",
+    "SERIAL_TEST_PORT": "optional - port for hardware tests",
+    "SERIAL_TEST_BAUD": "optional - baud rate for hardware tests"
+  },
+  "documentation": {
+    "readme": "README.md",
+    "architecture": "ARCHITECTURE.md",
+    "testing": "TESTING.md",
+    "websocket": "docs/WEBSOCKET_IMPLEMENTATION.md",
+    "cheatsheet": "llms.txt"
+  },
+  "testing": {
+    "unit_tests": "cargo test --lib --all-features",
+    "e2e_tests": "cargo test --test integration_e2e --all-features",
+    "hardware_tests": "TEST_PORT=COM15 cargo test --test integration_hardware --features auto-negotiation -- --ignored",
+    "mcp_validation": "npx @modelcontextprotocol/inspector --cli target/release/serial_mcp_agent"
+  }
+}
