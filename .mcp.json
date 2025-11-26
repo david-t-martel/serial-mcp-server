@@ -21,7 +21,10 @@
     "metrics",
     "create_session",
     "append_message",
+    "list_sessions",
+    "close_session",
     "list_messages",
+    "list_messages_range",
     "export_session",
     "filter_messages",
     "feature_index",
@@ -29,7 +32,9 @@
     "list_manufacturer_profiles"
   ],
   "features": {
-    "default": ["mcp", "rest-api"],
+    "default": ["mcp"],
+    "rest-api": "HTTP API (opt-in for web clients/testing)",
+    "legacy-stdio": "Legacy stdio interface (opt-in for scripting)",
     "async-serial": "Async serial I/O with tokio-serial",
     "auto-negotiation": "Auto-detect baud rate and parameters",
     "websocket": "Real-time WebSocket streaming at /ws/serial",
