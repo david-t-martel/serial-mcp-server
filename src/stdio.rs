@@ -15,8 +15,8 @@ pub async fn run_stdio_interface(state: AppState) {
     let stdin = io::stdin();
     loop {
         buffer.clear();
-    print!("> ");
-    let _ = io::stdout().flush(); // ignore transient flush errors
+        print!("> ");
+        let _ = io::stdout().flush(); // ignore transient flush errors
 
         if stdin.read_line(&mut buffer).is_err() || buffer.trim().is_empty() {
             // Exit on EOF (Ctrl+D) or read error.

@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh auth status:*)",
+      "Bash(gh repo create:*)",
+      "Bash(test:*)",
+      "Bash(dir:*)",
+      "Bash(chmod:*)",
+      "Bash(find:*)",
+      "Bash(git add:*)",
+      "Bash(cat:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(cargo tree:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo build:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo run:*)",
+      "Bash(cargo rustc:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo doc:*)",
+      "Bash(if not exist testse2e mkdir testse2e)",
+      "Bash(if not exist testshardware mkdir testshardware)",
+      "Bash(if not exist testscommon mkdir testscommon)",
+      "Bash(make hooks-install:*)",
+      "Bash(git config:*)",
+      "Bash(bash scripts/verify-hooks.sh:*)",
+      "Bash(make help:*)",
+      "Bash(tree:*)",
+      "Bash(cargo fmt:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

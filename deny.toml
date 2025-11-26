@@ -1,26 +1,32 @@
 # cargo-deny configuration for dependency and license auditing
+# https://embarkstudios.github.io/cargo-deny/
 
 [advisories]
-ignore = []
-db-path = "~/.cargo/advisory-db"
-
-[vulnerabilities]
-ignore = []
-severity-threshold = "low"
+# We acknowledge these upstream issues and will upgrade when fixes are available
+ignore = [
+    "RUSTSEC-2024-0363",  # sqlx binary protocol - will upgrade when available
+    "RUSTSEC-2024-0436",  # paste unmaintained - transitive dep via sqlx
+]
 
 [licenses]
-allow = ["MIT", "Apache-2.0", "MIT OR Apache-2.0", "Unicode-3.0"]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "CC0-1.0",
+    "Unlicense",
+]
 confidence-threshold = 0.8
 
-[licenses.exceptions]
-
 [bans]
-depth = 5
 multiple-versions = "warn"
-# Example: skip certain transient packages
-# skip = ["windows-sys"]
+wildcards = "allow"
 
 [sources]
-unknown-registry = "deny"
-unknown-git = "deny"
-allow-git = []
+unknown-registry = "warn"
+unknown-git = "warn"

@@ -1,5 +1,8 @@
 #[cfg(feature = "rest-api")]
-use axum::{http::StatusCode, response::{IntoResponse, Response}};
+use axum::{
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
 use std::fmt;
 
 #[cfg(feature = "rest-api")]
@@ -28,8 +31,14 @@ pub enum AppError {
 impl fmt::Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::PortNotOpen => write!(f, "Operation requires an open serial port, but the port is closed."),
-            Self::PortAlreadyOpen => write!(f, "Port is already open. Close it before trying to open it again."),
+            Self::PortNotOpen => write!(
+                f,
+                "Operation requires an open serial port, but the port is closed."
+            ),
+            Self::PortAlreadyOpen => write!(
+                f,
+                "Port is already open. Close it before trying to open it again."
+            ),
             Self::InvalidPayload(details) => write!(f, "The request payload is invalid: {details}"),
             Self::SerialError(e) => write!(f, "A serial port error occurred: {e}"),
             Self::IoError(e) => write!(f, "An I/O error occurred: {e}"),
@@ -45,10 +54,24 @@ impl IntoResponse for AppError {
         let (status, error_type, error_message) = match self {
             Self::PortNotOpen => (StatusCode::CONFLICT, "PortNotOpen", self.to_string()),
             Self::PortAlreadyOpen => (StatusCode::CONFLICT, "PortAlreadyOpen", self.to_string()),
-            Self::InvalidPayload(_) => (StatusCode::BAD_REQUEST, "InvalidPayload", self.to_string()),
-            Self::SerialError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "SerialError", self.to_string()),
-            Self::IoError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "IoError", self.to_string()),
-            Self::SerdeError(_) => (StatusCode::BAD_REQUEST, "DeserializationError", self.to_string()),
+            Self::InvalidPayload(_) => {
+                (StatusCode::BAD_REQUEST, "InvalidPayload", self.to_string())
+            }
+            Self::SerialError(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "SerialError",
+                self.to_string(),
+            ),
+            Self::IoError(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "IoError",
+                self.to_string(),
+            ),
+            Self::SerdeError(_) => (
+                StatusCode::BAD_REQUEST,
+                "DeserializationError",
+                self.to_string(),
+            ),
         };
 
         let body = axum::Json(json!({

@@ -1,0 +1,72 @@
+#!/bin/bash
+# Pre-push hook for rust-comm
+# Runs more comprehensive checks before pushing to remote
+# Install with: git config core.hooksPath .githooks
+
+set -e
+
+echo "🚀 Running pre-push checks..."
+echo ""
+
+# Color codes
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+FAILED=0
+
+# 1. Run all tests (including integration tests)
+echo "🧪 Running all tests (unit + integration)..."
+if cargo test --all-features; then
+    echo -e "${GREEN}✓${NC} All tests passed"
+else
+    echo -e "${RED}✗${NC} Tests failed"
+    FAILED=1
+fi
+echo ""
+
+# 2. Check for TODO/FIXME in changed files
+echo "🔍 Checking for TODO/FIXME in staged changes..."
+if git diff --cached --name-only | grep '\.rs$' | xargs grep -n 'TODO\|FIXME' 2>/dev/null; then
+    echo -e "${YELLOW}⚠${NC}  Found TODO/FIXME comments in staged files"
+    echo "   Review these before pushing (continuing anyway)"
+else
+    echo -e "${GREEN}✓${NC} No TODO/FIXME in staged files"
+fi
+echo ""
+
+# 3. Ensure no debug println! statements
+echo "🐛 Checking for debug println! statements..."
+if git diff --cached --name-only | grep '\.rs$' | xargs grep -n 'println!' 2>/dev/null | grep -v '^\s*//' | grep -v test; then
+    echo -e "${YELLOW}⚠${NC}  Found println! statements (use tracing instead)"
+    echo "   These should use tracing::debug!/info!/warn!/error!"
+    # Don't fail, just warn
+else
+    echo -e "${GREEN}✓${NC} No debug println! found"
+fi
+echo ""
+
+# 4. Build in release mode
+echo "🏗️  Building in release mode..."
+if cargo build --release --all-features --quiet; then
+    echo -e "${GREEN}✓${NC} Release build succeeded"
+else
+    echo -e "${RED}✗${NC} Release build failed"
+    FAILED=1
+fi
+echo ""
+
+# Final result
+if [ $FAILED -eq 0 ]; then
+    echo -e "${GREEN}✅ All pre-push checks passed!${NC}"
+    echo ""
+    exit 0
+else
+    echo -e "${RED}❌ Pre-push checks failed!${NC}"
+    echo ""
+    echo "Fix the issues above before pushing."
+    echo "Or use 'git push --no-verify' to bypass (not recommended)."
+    echo ""
+    exit 1
+fi

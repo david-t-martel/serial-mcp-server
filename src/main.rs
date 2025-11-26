@@ -1,21 +1,20 @@
-#[cfg(feature = "rest-api")] use axum::{extract::{Json, State}, routing::{get, post}, Router};
 use clap::Parser;
-use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 use tokio::signal;
 
-// Declare modules for better code organization
-mod error;
-mod mcp; // MCP sdk implementation
-mod state;
-mod stdio;
-mod session;
-#[cfg(feature = "rest-api")] mod rest_api;
+// All modules are now in the library - import what we need
+#[cfg(feature = "rest-api")]
+use serial_mcp_agent::AppResult;
+use serial_mcp_agent::{session, AppState, PortState};
 
-#[cfg(feature = "rest-api")] use crate::error::AppResult;
-use crate::state::{AppState, PortState};
+#[cfg(feature = "mcp")]
+use serial_mcp_agent::mcp;
+
+#[cfg(feature = "rest-api")]
+use serial_mcp_agent::rest_api;
+
 
 // Command-line arguments
 #[derive(Parser, Debug)]
@@ -50,7 +49,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize session store. Default to on-disk file (sessions.db). Allow override via env SESSION_DB_URL.
     // If the on-disk database cannot be opened (common in CI / read-only or sandboxed environments),
     // fall back to an in-memory shared SQLite instance so the server can still start and tests pass.
-    let db_url = std::env::var("SESSION_DB_URL").unwrap_or_else(|_| "sqlite://sessions.db".to_string());
+    let db_url =
+        std::env::var("SESSION_DB_URL").unwrap_or_else(|_| "sqlite://sessions.db".to_string());
     let session_store = match session::SessionStore::new(&db_url).await {
         Ok(store) => store,
         Err(e) => {
@@ -66,7 +66,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         if args.server {
             // --- HTTP Server Mode ---
-            let rest_ctx = rest_api::RestContext { state: app_state.clone(), sessions: std::sync::Arc::new(session_store.clone()) };
+            let rest_ctx = rest_api::RestContext {
+                state: app_state.clone(),
+                sessions: std::sync::Arc::new(session_store.clone()),
+            };
             let app = rest_api::build_router(rest_ctx);
 
             let addr = SocketAddr::from(([127, 0, 0, 1], args.port));
@@ -78,13 +81,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .await?;
         } else {
             // --- STDIO Mode (MCP preferred) ---
-            #[cfg(feature = "mcp")] {
+            #[cfg(feature = "mcp")]
+            {
                 tracing::info!("Serial MCP Server starting (stdio MCP mode)");
-                if let Err(e) = mcp::start_mcp_server_stdio(app_state.clone(), session_store).await {
+                if let Err(e) = mcp::start_mcp_server_stdio(app_state.clone(), session_store).await
+                {
                     tracing::error!(error = %e, "MCP server exited with error");
                 }
             }
-            #[cfg(not(feature = "mcp"))] {
+            #[cfg(not(feature = "mcp"))]
+            {
                 tracing::warn!("MCP feature disabled, falling back to legacy stdio JSON mode");
                 stdio::run_stdio_interface(app_state.clone()).await;
             }
@@ -92,13 +98,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     #[cfg(not(feature = "rest-api"))]
     {
-        #[cfg(feature = "mcp")] {
+        #[cfg(feature = "mcp")]
+        {
             tracing::info!("Serial MCP Server starting (stdio MCP mode)");
             if let Err(e) = mcp::start_mcp_server_stdio(app_state.clone(), session_store).await {
                 tracing::error!(error = %e, "MCP server exited with error");
             }
         }
-        #[cfg(not(feature = "mcp"))] {
+        #[cfg(not(feature = "mcp"))]
+        {
             tracing::warn!("MCP feature disabled, falling back to legacy stdio JSON mode");
             stdio::run_stdio_interface(app_state.clone()).await;
         }
@@ -115,17 +123,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(feature = "rest-api")]
 // Placeholder handlers kept for compatibility; currently non-functional beyond health.
 // Future: Reintroduce REST by bridging to MCP tool calls or remove feature entirely.
-async fn http_list_ports() -> AppResult<axum::Json<serde_json::Value>> { Err(crate::error::AppError::InvalidPayload("REST API deprecated".into())) }
+async fn http_list_ports() -> AppResult<axum::Json<serde_json::Value>> {
+    Err(serial_mcp_agent::AppError::InvalidPayload(
+        "REST API deprecated".into(),
+    ))
+}
 
 // --- Graceful Shutdown Handler ---
 async fn shutdown_signal() {
     let ctrl_c = async {
-        if let Err(e) = signal::ctrl_c().await { tracing::warn!(error = %e, "failed to install Ctrl+C handler"); }
+        if let Err(e) = signal::ctrl_c().await {
+            tracing::warn!(error = %e, "failed to install Ctrl+C handler");
+        }
     };
 
     #[cfg(unix)]
     let terminate = async {
-        if let Ok(mut sig) = signal::unix::signal(signal::unix::SignalKind::terminate()) { sig.recv().await; } else { tracing::warn!("failed to install terminate signal handler"); }
+        if let Ok(mut sig) = signal::unix::signal(signal::unix::SignalKind::terminate()) {
+            sig.recv().await;
+        } else {
+            tracing::warn!("failed to install terminate signal handler");
+        }
     };
 
     #[cfg(not(unix))]
@@ -138,4 +156,3 @@ async fn shutdown_signal() {
 
     tracing::info!("Signal received, starting graceful shutdown...");
 }
-

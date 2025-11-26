@@ -6,12 +6,12 @@ authors = ["Gemini"]
 description = "A robust, production-grade serial port server with a rich MCP interface for LLM agents."
 readme = "README.md"
 license = "MIT OR Apache-2.0"
-repository = "https://example.com/your/repo" # update with real URL
+repository = "https://github.com/david-t-martel/serial-mcp-server"
 keywords = ["serial", "mcp", "automation", "axum", "tokio"]
 categories = ["command-line-utilities", "api-bindings", "network-programming"]
 
 [dependencies]
-axum = { version = "0.8.6", optional = true }
+axum = { version = "0.8.6", features = ["ws"], optional = true }
 clap = { version = "4.5.4", features = ["derive"] }
 serde = { version = "1.0.197", features = ["derive"] }
 serde_json = "1.0.115"
@@ -28,20 +28,55 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 memchr = "2.7.6"
 
+# Phase 3: Async serial support
+tokio-serial = { version = "5.4", optional = true }
+parking_lot = "0.12"
+thiserror = "2.0"
+futures = { version = "0.3", optional = true }
+
+# Phase 5: OpenAPI documentation
+utoipa = { version = "5.2", features = ["axum_extras"], optional = true }
+utoipa-swagger-ui = { version = "8.0", features = ["axum"], optional = true }
+tokio-stream = { version = "0.1", optional = true }
+
 [features]
-default = ["mcp","rest-api"]
+default = ["mcp", "rest-api"]
 
 # Official MCP SDK integration
 mcp = ["rust-mcp-sdk"]
 rest-api = ["axum"]
 
+# Async serial support (Phase 3)
+async-serial = ["tokio-serial", "futures"]
+
+# Auto-negotiation (Phase 4)
+auto-negotiation = ["async-serial"]
+
+# WebSocket streaming (Phase 5)
+websocket = ["rest-api", "tokio-stream"]
+
+# OpenAPI documentation (Phase 5)
+openapi = ["utoipa", "utoipa-swagger-ui"]
+
 # Optional: build without stdio (provide only HTTP) later if needed
 stdio-only = []
+
+# Hardware testing - requires real serial devices
+hardware-tests = []
 
 [dev-dependencies]
 serde_json = "1.0"
 criterion = { version = "0.7.0", features = ["async_tokio"] }
 assert-json-diff = "2.0"
+
+# Phase 1: Testing infrastructure
+mockall = "0.13"
+proptest = "1.4"
+insta = { version = "1.40", features = ["json"] }
+tokio-test = "0.4"
+pretty_assertions = "1.4"
+serial_test = "3.0"
+tempfile = "3.10"
 
 [[bench]]
 name = "basic"

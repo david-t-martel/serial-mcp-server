@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion, black_box};
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use std::time::Duration;
 
 pub fn bench_json_parsing(c: &mut Criterion) {
@@ -11,7 +11,7 @@ pub fn bench_json_parsing(c: &mut Criterion) {
     });
 }
 
-criterion_group!{
+criterion_group! {
     name = benches;
     config = Criterion::default()
         .warm_up_time(Duration::from_millis(300))

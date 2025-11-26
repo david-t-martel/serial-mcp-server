@@ -1,10 +1,10 @@
 //! Verify that the server's initialize response is Content-Length framed (protocol compliance).
-use std::process::{Command, Stdio};
-use std::io::{Read, Write};
-use std::time::{Duration, Instant};
-use std::thread;
-use std::sync::{Arc, Mutex};
 use serde_json::Value;
+use std::io::{Read, Write};
+use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
 
 fn spawn_stdio_no_debug() -> std::process::Child {
     Command::new(env!("CARGO_BIN_EXE_serial_mcp_agent"))
@@ -33,7 +33,11 @@ fn initialize_is_framed() {
         loop {
             match child_stdout.read(&mut local) {
                 Ok(0) => break,
-                Ok(n) => { if let Ok(mut b) = out_buf_clone.lock() { b.extend_from_slice(&local[..n]); } },
+                Ok(n) => {
+                    if let Ok(mut b) = out_buf_clone.lock() {
+                        b.extend_from_slice(&local[..n]);
+                    }
+                }
                 Err(_) => break,
             }
         }
@@ -43,7 +47,11 @@ fn initialize_is_framed() {
         loop {
             match child_stderr.read(&mut local) {
                 Ok(0) => break,
-                Ok(n) => { if let Ok(mut b) = err_buf_clone.lock() { b.extend_from_slice(&local[..n]); } },
+                Ok(n) => {
+                    if let Ok(mut b) = err_buf_clone.lock() {
+                        b.extend_from_slice(&local[..n]);
+                    }
+                }
                 Err(_) => break,
             }
         }
@@ -55,7 +63,7 @@ fn initialize_is_framed() {
     let init_body = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0.0.0"}}}"#;
     let frame = format!(
         "Content-Length: {}\r\nContent-Type: application/json\r\n\r\n{}\n",
-        init_body.as_bytes().len(),
+        init_body.len(),
         init_body
     );
     stdin.write_all(frame.as_bytes()).unwrap();
@@ -67,9 +75,14 @@ fn initialize_is_framed() {
         {
             let raw = out_buf.lock().unwrap();
             for v in parse_framed_messages(&raw) {
-                if v.get("id").and_then(|i| i.as_i64()) == Some(1) { framed_init = Some(v); break; }
+                if v.get("id").and_then(|i| i.as_i64()) == Some(1) {
+                    framed_init = Some(v);
+                    break;
+                }
             }
-            if framed_init.is_some() { break; }
+            if framed_init.is_some() {
+                break;
+            }
         }
         thread::sleep(Duration::from_millis(25));
     }
@@ -82,7 +95,9 @@ fn initialize_is_framed() {
     let raw_final = out_buf.lock().unwrap().clone();
     let stderr_final = err_buf.lock().unwrap().clone();
     // If no framed message, treat each newline as potential JSON object (transport is line-delimited)
-    let val = if let Some(v) = framed_init { v } else {
+    let val = if let Some(v) = framed_init {
+        v
+    } else {
         let line_objs = parse_line_json(&raw_final);
         line_objs.into_iter().find(|v| v.get("id").and_then(|i| i.as_i64()) == Some(1))
             .unwrap_or_else(|| {
@@ -99,10 +114,14 @@ fn parse_framed_messages(buf: &[u8]) -> Vec<Value> {
     let mut msgs = Vec::new();
     let mut idx = 0usize;
     while idx < buf.len() {
-        while idx < buf.len() && buf[idx].is_ascii_whitespace() { idx += 1; }
-        if idx >= buf.len() { break; }
+        while idx < buf.len() && buf[idx].is_ascii_whitespace() {
+            idx += 1;
+        }
+        if idx >= buf.len() {
+            break;
+        }
         if buf[idx..].starts_with(b"Content-Length:") {
-            if let Some(s) = std::str::from_utf8(&buf[idx..]).ok() {
+            if let Ok(s) = std::str::from_utf8(&buf[idx..]) {
                 if let Some(term_pos) = s.find("\r\n\r\n").or_else(|| s.find("\n\n")) {
                     let header = &s[..term_pos];
                     let mut content_length: Option<usize> = None;
@@ -113,19 +132,33 @@ fn parse_framed_messages(buf: &[u8]) -> Vec<Value> {
                         }
                     }
                     if let Some(len) = content_length {
-                        let header_bytes = if s.as_bytes()[term_pos..].starts_with(b"\r\n\r\n") { term_pos + 4 } else { term_pos + 2 };
+                        let header_bytes = if s.as_bytes()[term_pos..].starts_with(b"\r\n\r\n") {
+                            term_pos + 4
+                        } else {
+                            term_pos + 2
+                        };
                         let abs_body_start = idx + header_bytes;
                         let abs_body_end = abs_body_start + len;
                         if abs_body_end <= buf.len() {
-                            if let Ok(val) = serde_json::from_slice(&buf[abs_body_start..abs_body_end]) {
+                            if let Ok(val) =
+                                serde_json::from_slice(&buf[abs_body_start..abs_body_end])
+                            {
                                 msgs.push(val);
                                 idx = abs_body_end;
                                 continue;
                             }
-                        } else { break; }
-                    } else { break; }
-                } else { break; }
-            } else { break; }
+                        } else {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
         } else {
             // Encountered non-framed data; stop (we only care about framed messages here)
             break;
@@ -136,5 +169,11 @@ fn parse_framed_messages(buf: &[u8]) -> Vec<Value> {
 
 // Very simple scan for standalone JSON objects (not robust; for diagnostics only)
 fn parse_line_json(buf: &[u8]) -> Vec<Value> {
-    if let Ok(s) = std::str::from_utf8(buf) { s.lines().filter_map(|l| serde_json::from_str::<Value>(l.trim()).ok()).collect() } else { vec![] }
+    if let Ok(s) = std::str::from_utf8(buf) {
+        s.lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l.trim()).ok())
+            .collect()
+    } else {
+        vec![]
+    }
 }

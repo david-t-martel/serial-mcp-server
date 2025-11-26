@@ -1,0 +1,69 @@
+#!/bin/bash
+# Commit message validation hook
+# Enforces conventional commit format
+# Install with: git config core.hooksPath .githooks
+
+commit_msg_file="$1"
+commit_msg=$(cat "$commit_msg_file")
+
+# Color codes
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Conventional commit pattern
+# Format: <type>(<scope>): <description>
+# Type is required, scope is optional
+pattern="^(feat|fix|docs|style|refactor|perf|test|chore|ci|build|revert)(\(.+\))?: .{1,72}"
+
+# Allow merge commits
+if echo "$commit_msg" | grep -qE "^Merge branch"; then
+    exit 0
+fi
+
+# Allow revert commits
+if echo "$commit_msg" | grep -qE "^Revert "; then
+    exit 0
+fi
+
+# Check conventional commit format
+if ! echo "$commit_msg" | grep -qE "$pattern"; then
+    echo -e "${RED}❌ Invalid commit message format!${NC}"
+    echo ""
+    echo "Commit message must follow conventional commits format:"
+    echo "  <type>(<scope>): <description>"
+    echo ""
+    echo "Types:"
+    echo "  feat:     A new feature"
+    echo "  fix:      A bug fix"
+    echo "  docs:     Documentation only changes"
+    echo "  style:    Code style changes (formatting, etc.)"
+    echo "  refactor: Code change that neither fixes a bug nor adds a feature"
+    echo "  perf:     Performance improvement"
+    echo "  test:     Adding or updating tests"
+    echo "  chore:    Maintenance tasks"
+    echo "  ci:       CI/CD changes"
+    echo "  build:    Build system or dependency changes"
+    echo "  revert:   Revert a previous commit"
+    echo ""
+    echo "Scope is optional but recommended (e.g., 'mcp', 'serial', 'api')"
+    echo ""
+    echo "Examples:"
+    echo "  feat(mcp): add list_ports_extended tool"
+    echo "  fix(serial): handle connection timeout properly"
+    echo "  docs: update README with installation steps"
+    echo ""
+    echo "Your commit message:"
+    echo "  $commit_msg"
+    echo ""
+    exit 1
+fi
+
+# Check message length (first line should be <= 72 chars)
+first_line=$(echo "$commit_msg" | head -n 1)
+if [ ${#first_line} -gt 72 ]; then
+    echo -e "${YELLOW}⚠  Warning: First line is ${#first_line} characters (recommended max: 72)${NC}"
+    echo ""
+fi
+
+exit 0
